@@ -37,3 +37,11 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# ===== 截图与二进制附件（体积大且无版本价值）=====
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.webp

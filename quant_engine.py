@@ -1302,10 +1302,10 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
     backend_notice = ""
     if backend_stopped:
         backend_notice = """
-  <div role="alert" style="background:rgba(244,63,94,.16);border:2px solid #f43f5e;border-radius:12px;padding:18px 20px;margin-bottom:24px;">
-    <div style="font-size:20px;font-weight:800;color:#fb7185;">后台已断开 · 自动交易已停止</div>
-    <div style="font-size:13px;color:#fecdd3;margin-top:6px;">检测到 STOP 文件。当前页面仅展示最后一次对账快照，不会继续扫描、开仓或平仓；链上订单与资产不会因此自动撤销。</div>
-  </div>"""
+      <div class="system-banner danger" role="alert">
+        <span class="banner-dot"></span><strong>后台已断开 · 自动交易已停止</strong>
+        <span>当前仅展示最后一次对账快照；链上订单与资产不会因此自动撤销。</span>
+      </div>"""
 
     # 在途挂单账本 + 单实例锁状态（用于确认没有重复实例、没有悬挂卖单）
     try:
@@ -1383,16 +1383,16 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
         success_time = escape(str(reconciliation.get("reconciled_at") or ""))
         if success_age is not None and 0 <= success_age <= 600:
             connection_notice = f"""
-  <div role="status" style="background:rgba(16,185,129,.13);border:2px solid #10b981;border-radius:12px;padding:18px 20px;margin-bottom:24px;">
-    <div style="font-size:19px;font-weight:800;color:#6ee7b7;">正常连接</div>
-    <div style="font-size:13px;color:#d1fae5;margin-top:6px;">最近一次完整对账成功: {success_time}。Data API、Polygon RPC 与 CLOB 均已通过只读检查。</div>
-  </div>"""
+      <div class="system-banner success" role="status">
+        <span class="banner-dot"></span><strong>系统连接正常</strong>
+        <span>Data API、Polygon RPC 与 CLOB 只读检查通过 · 最近对账 {success_time}</span>
+      </div>"""
         else:
             connection_notice = """
-  <div role="status" style="background:rgba(251,191,36,.12);border:1px solid #f59e0b;border-radius:12px;padding:18px 20px;margin-bottom:24px;">
-    <div style="font-size:18px;font-weight:800;color:#fcd34d;">连接状态待确认</div>
-    <div style="font-size:13px;color:#fef3c7;margin-top:6px;">最近没有足够新的完整对账结果，当前显示的是历史快照，不能据此判断接口正常。</div>
-  </div>"""
+      <div class="system-banner warning" role="status">
+        <span class="banner-dot"></span><strong>连接状态待确认</strong>
+        <span>最近没有足够新的完整对账结果，当前显示历史快照。</span>
+      </div>"""
 
     error_notice = ""
     error_section = ""
@@ -1405,10 +1405,10 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
         error_is_current = last_success is None or latest_event_time is None or latest_event_time > last_success
         if error_is_current:
             error_notice = f"""
-  <div role="alert" style="background:rgba(251,146,60,.14);border:2px solid #fb923c;border-radius:12px;padding:18px 20px;margin-bottom:24px;">
-    <div style="font-size:19px;font-weight:800;color:#fdba74;">交易异常告警 · {latest_stage} · {latest_title}</div>
-    <div style="font-size:13px;color:#ffedd5;margin-top:6px;">异常发生时间: {latest_time}。本次操作未确认成功；请查看下方错误详情与处理建议。</div>
-  </div>"""
+      <div class="system-banner warning" role="alert">
+        <span class="banner-dot"></span><strong>交易异常 · {latest_stage} · {latest_title}</strong>
+        <span>{latest_time} · 本次操作未确认成功，请查看错误卡片中的处理建议。</span>
+      </div>"""
         error_rows = ""
         for event in error_events[:50]:
             question = escape(str(event.get("question") or "—"))
@@ -1416,202 +1416,364 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
             source = "历史补录" if event.get("source") == "history" else "实时记录"
             source_record = escape(str(event.get("source_record") or ""))
             context = escape(str(event.get("context") or ""))
-            context_html = f'<div class="sub">触发原因: {context}</div>' if context else ""
+            context_html = f'<div class="error-context"><strong>触发原因</strong>{context}</div>' if context else ""
             error_rows += f"""
-        <tr>
-          <td class="sub" style="white-space:nowrap;">{escape(str(event.get('ts_utc', '')))}</td>
-          <td><span class="badge badge-error">{escape(str(event.get('stage_label') or event.get('stage') or '交易'))}</span></td>
-          <td style="color:#fdba74;font-weight:700;">{escape(str(event.get('category_label') or event.get('category') or '交易异常'))}</td>
-          <td><div class="error-market">{question}</div><div class="sub">{side} · {source} {source_record}</div></td>
-          <td><div class="error-detail">{escape(str(event.get('detail') or ''))}</div>{context_html}</td>
-          <td>{escape(str(event.get('handling') or '保持账本不变并检查错误。'))}</td>
-        </tr>"""
+      <details class="error-item">
+        <summary>
+          <span class="badge badge-error">{escape(str(event.get('stage_label') or event.get('stage') or '交易'))}</span>
+          <span class="error-summary">
+            <strong>{escape(str(event.get('category_label') or event.get('category') or '交易异常'))}</strong>
+            <span>{question}</span>
+          </span>
+          <time>{escape(str(event.get('ts_utc', '')))}</time>
+        </summary>
+        <div class="error-body">
+          <div class="error-record-meta">{side} · {source} {source_record}</div>
+          <div class="error-detail">{escape(str(event.get('detail') or ''))}</div>
+          {context_html}
+          <div class="error-handling"><strong>处理建议</strong>{escape(str(event.get('handling') or '保持账本不变并检查错误。'))}</div>
+        </div>
+      </details>"""
         error_section = f"""
-  <div class="section error-section">
-    <h2><span>交易错误与授权告警</span><span class="sub">持久化记录: logs/trading_errors.jsonl · 最近 {min(len(error_events), 50)} / 共 {len(error_events)} 条</span></h2>
-    <div class="sub" style="margin-bottom:12px;">这些记录表示订单或操作失败，不代表已经修复，也不代表订单已成交。后台停止期间仅保留和展示历史告警。</div>
-    <table>
-      <thead><tr><th>发生时间 (UTC)</th><th>阶段</th><th>错误类型</th><th>市场 / 方向</th><th>原始错误摘要</th><th>处理建议</th></tr></thead>
-      <tbody>{error_rows}</tbody>
-    </table>
-  </div>"""
+    <section class="panel error-panel">
+      <div class="panel-header">
+        <div><h2>交易错误与授权告警</h2><p>Errors & authorization</p></div>
+        <span class="panel-meta">最近 {min(len(error_events), 50)} / {len(error_events)}</span>
+      </div>
+      <div class="panel-note">失败记录不代表已成交或已修复；点击记录可查看原始错误与处理建议。</div>
+      <div class="scroll-region error-list" data-scroll-key="errors" tabindex="0" role="region" aria-label="交易错误记录，可滚动">
+        {error_rows}
+      </div>
+    </section>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="15">
-<title>Polymarket 10U 量化实时监控面板</title>
+<title>Polymarket · 量化交易监控</title>
 <style>
   :root {{
-    --bg: #0f172a; --card: #1e293b; --border: #334155;
-    --text: #f8fafc; --muted: #94a3b8; --accent: #38bdf8;
-    --green: #10b981; --red: #f43f5e;
+    color-scheme: dark;
+    --bg: #090d14; --card: #111823; --card-raised: #151e2b; --border: #233042;
+    --text: #edf3fa; --muted: #8492a6; --faint: #59687c; --accent: #7dd3fc;
+    --green: #34d399; --red: #fb7185; --orange: #fbbf24;
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  html, body {{ height: 100%; }}
   body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg); color: var(--text); padding: 24px; line-height: 1.5;
+    font-family: Inter, "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); overflow: hidden; line-height: 1.45;
+    font-size: 13px; -webkit-font-smoothing: antialiased;
   }}
-  .header {{
-    display: flex; justify-content: space-between; align-items: center;
-    border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 24px;
+  button, input, table {{ font: inherit; }}
+  code, .kpi-val, td, .updated-time {{ font-variant-numeric: tabular-nums; }}
+  .app-shell {{
+    height: 100dvh; max-width: 2200px; margin: 0 auto; padding: 16px 18px;
+    display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); gap: 12px;
   }}
-  .header h1 {{ font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 12px; }}
+  .topbar {{ display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 46px; }}
+  .brand {{ display: flex; align-items: center; gap: 11px; min-width: 0; }}
+  .brand-mark {{
+    width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center;
+    border: 1px solid #38536c; border-radius: 11px; background: #132333;
+    color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: -.03em;
+  }}
+  .title-line {{ display: flex; align-items: center; gap: 10px; }}
+  h1 {{ font-size: 18px; line-height: 1.2; letter-spacing: -.025em; font-weight: 700; }}
+  .brand-subtitle {{ color: var(--muted); font-size: 11px; margin-top: 4px; }}
   .mode-pill {{
-    background: rgba(56, 189, 248, 0.15); color: var(--accent);
-    border: 1px solid var(--accent); padding: 4px 12px; border-radius: 999px; font-size: 13px;
+    display: inline-flex; align-items: center; gap: 6px; max-width: 260px;
+    padding: 3px 8px; border: 1px solid #285846; border-radius: 999px;
+    background: rgba(52, 211, 153, .07); color: #6ee7b7;
+    font-size: 10px; font-weight: 700; letter-spacing: .03em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }}
-  .kpi-grid {{
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: 16px; margin-bottom: 24px;
+  .mode-pill::before {{ content: ""; width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: var(--green); }}
+  .header-meta {{ display: flex; align-items: center; gap: 22px; text-align: right; }}
+  .wallet {{ max-width: 210px; }}
+  .meta-label {{ display: block; color: var(--faint); font-size: 10px; margin-bottom: 3px; }}
+  .wallet code {{ display: block; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .updated-time {{ color: #c9d4e2; font-size: 12px; font-weight: 600; white-space: nowrap; }}
+  .notice-stack {{ display: grid; gap: 6px; }}
+  .notice-stack:empty {{ display: none; }}
+  .system-banner {{
+    min-height: 34px; display: flex; align-items: center; gap: 9px; padding: 7px 11px;
+    border: 1px solid var(--border); border-radius: 9px; background: var(--card);
+    color: var(--muted); font-size: 11px;
   }}
+  .system-banner strong {{ color: var(--text); font-size: 11px; white-space: nowrap; }}
+  .system-banner > span:last-child {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .banner-dot {{ width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }}
+  .system-banner.success {{ border-color: rgba(52, 211, 153, .24); background: rgba(52, 211, 153, .045); }}
+  .system-banner.success .banner-dot {{ background: var(--green); box-shadow: 0 0 0 3px rgba(52, 211, 153, .08); }}
+  .system-banner.success strong {{ color: #6ee7b7; }}
+  .system-banner.warning {{ border-color: rgba(251, 191, 36, .28); background: rgba(251, 191, 36, .05); }}
+  .system-banner.warning .banner-dot {{ background: var(--orange); }}
+  .system-banner.warning strong {{ color: #fcd34d; }}
+  .system-banner.danger {{ border-color: rgba(251, 113, 133, .32); background: rgba(251, 113, 133, .06); }}
+  .system-banner.danger .banner-dot {{ background: var(--red); }}
+  .system-banner.danger strong {{ color: #fda4af; }}
+  .kpi-grid {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }}
   .kpi-card {{
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 16px;
+    position: relative; min-width: 0; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--card);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .08);
   }}
-  .kpi-label {{ font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }}
-  .kpi-val {{ font-size: 26px; font-weight: 700; margin-top: 6px; }}
-  .kpi-sub {{ font-size: 12px; color: var(--muted); margin-top: 4px; }}
-  .section {{
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 20px; margin-bottom: 24px;
+  .kpi-card::before {{ content: ""; position: absolute; inset: 0 auto 0 0; width: 2px; border-radius: 12px 0 0 12px; background: #2c3d50; }}
+  .kpi-card:first-child::before {{ background: var(--green); }}
+  .kpi-label {{ display: flex; justify-content: space-between; gap: 8px; color: #a6b3c3; font-size: 11px; }}
+  .kpi-english {{ color: var(--faint); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }}
+  .kpi-val {{ margin-top: 4px; color: var(--text); font-size: 25px; line-height: 1.15; font-weight: 700; letter-spacing: -.035em; white-space: nowrap; }}
+  .kpi-val small {{ color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0; }}
+  .kpi-sub {{ margin-top: 5px; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .workspace {{
+    min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px;
   }}
-  .section h2 {{ font-size: 16px; margin-bottom: 14px; color: #e2e8f0; display: flex; justify-content: space-between; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }}
-  th {{ color: var(--muted); font-weight: 600; background: rgba(15, 23, 42, 0.4); }}
-  .q-cell {{ max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-  .pos {{ color: var(--green); font-weight: 600; }}
-  .neg {{ color: var(--red); font-weight: 600; }}
-  .sub {{ font-size: 11px; color: var(--muted); }}
+  .panel {{
+    min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+    border: 1px solid var(--border); border-radius: 13px; background: var(--card);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .09);
+  }}
+  .panel-header {{
+    flex: 0 0 auto; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+    padding: 12px 14px 10px; border-bottom: 1px solid rgba(35, 48, 66, .7);
+  }}
+  .panel-header h2 {{ color: #dce6f1; font-size: 12px; font-weight: 650; letter-spacing: .01em; }}
+  .panel-header p {{ margin-top: 2px; color: var(--faint); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }}
+  .panel-meta {{ flex: 0 0 auto; color: var(--muted); font-size: 10px; white-space: nowrap; }}
+  .panel-note {{ flex: 0 0 auto; padding: 8px 14px; color: var(--muted); font-size: 10px; border-bottom: 1px solid rgba(35, 48, 66, .55); }}
+  .scroll-region {{ flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }}
+  .scroll-region:focus-visible {{ outline: 2px solid var(--accent); outline-offset: -2px; }}
+  .scroll-region::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+  .scroll-region::-webkit-scrollbar-track {{ background: transparent; }}
+  .scroll-region::-webkit-scrollbar-thumb {{ background: #2b3a4d; border: 2px solid var(--card); border-radius: 8px; }}
+  .scroll-region::-webkit-scrollbar-thumb:hover {{ background: #3b4f66; }}
+  .chart-wrap {{ flex: 1; min-height: 0; padding: 10px 12px 12px; }}
+  .chart-wrap svg {{ display: block; width: 100%; height: 100%; min-height: 150px; }}
+  table {{ width: 100%; border-collapse: separate; border-spacing: 0; color: #bac7d5; font-size: 11px; }}
+  th, td {{ padding: 8px 10px; border-bottom: 1px solid rgba(35, 48, 66, .75); text-align: left; vertical-align: middle; white-space: nowrap; }}
+  th {{ position: sticky; top: 0; z-index: 2; background: var(--card-raised); color: #7f90a5; font-size: 10px; font-weight: 600; }}
+  tbody tr:last-child td {{ border-bottom: 0; }}
+  td .sub {{ display: inline; }}
+  .positions-table {{ min-width: 1180px; }}
+  .orders-table {{ min-width: 900px; }}
+  .closed-table {{ min-width: 920px; }}
+  .signals-table {{ min-width: 760px; }}
+  .q-cell {{ max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .pos {{ color: var(--green); font-weight: 650; }}
+  .neg {{ color: var(--red); font-weight: 650; }}
+  .sub {{ color: var(--muted); font-size: 10px; }}
+  code {{ color: #9fb2c8; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }}
   .badge {{
-    display: inline-block; padding: 2px 8px; border-radius: 6px;
-    font-size: 11px; font-weight: 600; background: #334155; color: #f8fafc;
+    display: inline-flex; align-items: center; padding: 2px 6px; border-radius: 5px;
+    background: #263447; color: #d3deea; font-size: 9px; font-weight: 700; line-height: 1.5;
   }}
-  .badge-side {{ background: rgba(56, 189, 248, 0.2); color: #38bdf8; }}
-  .badge-buy {{ background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981; }}
-  .badge-skip {{ background: rgba(148, 163, 184, 0.15); color: #94a3b8; }}
-  .badge-error {{ background: rgba(251, 146, 60, 0.18); color: #fdba74; border: 1px solid #fb923c; }}
-  .error-section {{ border-color: #fb923c; }}
-  .error-detail {{ max-width: 480px; overflow-wrap: anywhere; white-space: normal; color: #ffedd5; }}
-  .error-market {{ max-width: 260px; overflow-wrap: anywhere; }}
+  .badge-side {{ background: rgba(125, 211, 252, .1); color: var(--accent); }}
+  .badge-buy {{ background: rgba(52, 211, 153, .1); color: #6ee7b7; }}
+  .badge-skip {{ background: rgba(132, 146, 166, .1); color: #9aaabc; }}
+  .badge-error {{ background: rgba(251, 191, 36, .1); color: #fcd34d; }}
+  .error-panel {{ border-color: rgba(251, 191, 36, .25); }}
+  .error-list {{ padding: 0 12px 10px; }}
+  .error-item {{ border-bottom: 1px solid rgba(35, 48, 66, .7); }}
+  .error-item summary {{
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px;
+    padding: 10px 2px; cursor: pointer; list-style: none;
+  }}
+  .error-item summary::-webkit-details-marker {{ display: none; }}
+  .error-item summary::after {{ content: "+"; grid-column: 3; grid-row: 1 / span 2; color: var(--faint); font-size: 15px; }}
+  .error-item[open] summary::after {{ content: "−"; }}
+  .error-summary {{ min-width: 0; display: flex; align-items: baseline; gap: 7px; }}
+  .error-summary strong {{ flex: 0 0 auto; color: #fcd34d; font-size: 10px; }}
+  .error-summary > span {{ color: #aebdce; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  .error-item time {{ grid-column: 2; color: var(--faint); font-size: 9px; }}
+  .error-body {{ margin: 0 0 10px; padding: 10px; border-radius: 8px; background: #0c121b; color: #aebdce; font-size: 10px; overflow-wrap: anywhere; }}
+  .error-record-meta {{ margin-bottom: 8px; color: var(--faint); }}
+  .error-detail {{ color: #d2dce8; white-space: normal; }}
+  .error-context, .error-handling {{ margin-top: 8px; }}
+  .error-context strong, .error-handling strong {{ display: block; margin-bottom: 2px; color: #8492a6; }}
+  .order-status {{ flex: 0 0 auto; display: grid; gap: 5px; padding: 9px 12px; border-bottom: 1px solid rgba(35, 48, 66, .7); }}
+  .status-row {{ display: flex; align-items: baseline; gap: 7px; min-width: 0; color: var(--muted); font-size: 9px; }}
+  .status-row strong {{ flex: 0 0 auto; color: #91a5bb; font-weight: 600; }}
+  .status-row span {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+  @media (hover: hover) and (pointer: fine) {{
+    tbody tr:hover td {{ background: rgba(125, 211, 252, .025); }}
+    .error-item summary:hover .error-summary > span {{ color: var(--text); }}
+  }}
+  @media (min-width: 1001px) and (max-height: 800px) {{
+    .app-shell {{ padding: 10px 12px; gap: 8px; }}
+    .topbar {{ min-height: 38px; }}
+    .brand-mark {{ width: 34px; height: 34px; }}
+    .brand-subtitle {{ display: none; }}
+    .kpi-grid, .workspace {{ gap: 8px; }}
+    .kpi-card {{ padding: 9px 12px; }}
+    .kpi-val {{ font-size: 22px; }}
+    .panel-header {{ padding: 9px 12px 8px; }}
+    .panel-note {{ padding: 6px 12px; }}
+  }}
+  @media (max-width: 1180px) {{
+    .kpi-english {{ display: none; }}
+    .wallet {{ display: none; }}
+  }}
+  @media (max-width: 1000px) {{
+    body {{ overflow: auto; }}
+    .app-shell {{ height: auto; min-height: 100dvh; }}
+    .workspace {{ grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: none; grid-auto-rows: 360px; }}
+    .kpi-grid {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+  }}
+  @media (max-width: 680px) {{
+    .app-shell {{ padding: 12px; gap: 10px; }}
+    .topbar {{ align-items: flex-start; gap: 12px; }}
+    .header-meta {{ gap: 0; }}
+    .updated-time {{ font-size: 10px; white-space: normal; }}
+    .mode-pill {{ max-width: 140px; }}
+    .kpi-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }}
+    .kpi-card:last-child {{ grid-column: 1 / -1; }}
+    .workspace {{ grid-template-columns: 1fr; grid-auto-rows: 380px; gap: 10px; }}
+    .system-banner {{ align-items: flex-start; flex-wrap: wrap; }}
+    .system-banner > span:last-child {{ width: 100%; white-space: normal; }}
+  }}
 </style>
 </head>
 <body>
-  <div class="header">
-    <div>
-      <h1>Polymarket 量化交易终端 <span class="mode-pill">{state['mode']}</span></h1>
-      <div class="sub" style="margin-top:6px;">
-        专属钱包: <code>{state['wallet_address']}</code> | 估值准则: 严格按盘口真实买一价 (Best Bid) 计价，已扣除买卖价差成本
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">PM</div>
+      <div>
+        <div class="title-line"><h1>Polymarket</h1><span class="mode-pill">{state['mode']}</span></div>
+        <div class="brand-subtitle">量化交易监控终端 · Best Bid 真实盘口计价</div>
       </div>
     </div>
-    <div style="text-align:right;">
-      <div class="sub">最后更新时间 (页面每15秒重载，数据随引擎巡检周期更新)</div>
-      <div style="font-size:14px;font-weight:600;">{state['last_updated']}</div>
+    <div class="header-meta">
+      <div class="wallet"><span class="meta-label">专属钱包</span><code title="{state['wallet_address']}">{state['wallet_address']}</code></div>
+      <div><span class="meta-label">最后更新 · 15 秒自动刷新</span><div class="updated-time">{state['last_updated']}</div></div>
     </div>
-  </div>
+  </header>
 
-  {backend_notice}
-  {connection_notice}
-  {error_notice}
+  <div class="notice-stack">{backend_notice}{connection_notice}{error_notice}</div>
 
-  <div class="kpi-grid">
+  <section class="kpi-grid" aria-label="账户概览">
     <div class="kpi-card">
-      <div class="kpi-label">账户总净值 (Total Equity)</div>
+      <div class="kpi-label"><span>账户总净值</span><span class="kpi-english">Equity</span></div>
       <div class="kpi-val" style="color:{pnl_color};">${state['total_equity_usdc']:.2f}</div>
-      <div class="kpi-sub">初始本金: ${state['initial_capital_usdc']:.2f} ({state['total_return_pct']:+.2f}%)</div>
+      <div class="kpi-sub">本金 ${state['initial_capital_usdc']:.2f} · 回报 {state['total_return_pct']:+.2f}%</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">总盈亏 (Total PnL)</div>
+      <div class="kpi-label"><span>总盈亏</span><span class="kpi-english">Total PnL</span></div>
       <div class="kpi-val" style="color:{pnl_color};">${total_pnl:+.2f}</div>
-      <div class="kpi-sub">已实现: ${state['realized_pnl_usdc']:+.2f} | 浮动: ${state['unrealized_pnl_usdc']:+.2f}</div>
+      <div class="kpi-sub">已实现 ${state['realized_pnl_usdc']:+.2f} · 浮动 ${state['unrealized_pnl_usdc']:+.2f}</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">可用现金 (Available Cash)</div>
+      <div class="kpi-label"><span>可用现金</span><span class="kpi-english">Cash</span></div>
       <div class="kpi-val">${state['cash_usdc']:.2f}</div>
-      <div class="kpi-sub">单笔上限: $2.00 · 1/4 凯利目标仓位 (受 $1.00 最小下单额约束)</div>
+      <div class="kpi-sub">单笔上限 $2.00 · 1/4 凯利 · 最小 $1.00</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">当前持仓数 (Open Positions)</div>
-      <div class="kpi-val">{len(state['open_positions'])} / 4</div>
+      <div class="kpi-label"><span>当前持仓</span><span class="kpi-english">Positions</span></div>
+      <div class="kpi-val">{len(state['open_positions'])} <small>/ 4</small></div>
       <div class="kpi-sub">同一事件互斥锁已开启</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">累计扫描与过滤统计</div>
-      <div class="kpi-val">{state['stats']['signals_triggered']} <span style="font-size:14px;color:var(--muted);">笔成交 / {state['stats']['markets_evaluated']} 次评估</span></div>
-      <div class="kpi-sub">风控拦截跳过: {state['stats']['skipped_count']} 次</div>
+      <div class="kpi-label"><span>扫描与过滤</span><span class="kpi-english">Activity</span></div>
+      <div class="kpi-val">{state['stats']['signals_triggered']} <small>笔成交</small></div>
+      <div class="kpi-sub">{state['stats']['markets_evaluated']:,} 次评估 · {state['stats']['skipped_count']:,} 次跳过</div>
     </div>
-  </div>
+  </section>
 
-  {error_section}
+  <main class="workspace">
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>账户净值走势</h2><p>Equity curve</p></div>
+        <span class="panel-meta">portfolio.json</span>
+      </div>
+      <div class="chart-wrap">{equity_svg}</div>
+    </section>
 
-  <div class="section">
-    <h2><span>在途挂单账本 (Pending Orders)</span> <span class="sub">防止重复下单与超额卖出 · 共 {pending_summary.get('total',0)} 笔，其中阻塞中 {pending_summary.get('blocking',0)} 笔</span></h2>
-    <div style="background:rgba(56,138,221,.10);border:1px solid rgba(56,138,221,.35);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#cbd5e1;">
-      <strong style="color:#93c5fd;">单实例锁：</strong>{lock_text}
-      &nbsp;·&nbsp;<strong style="color:#93c5fd;">在途买单名义：</strong>${pending_summary.get('open_buy_notional_usdc',0):.2f}
-      &nbsp;·&nbsp;<strong style="color:#93c5fd;">在途卖单名义：</strong>${pending_summary.get('open_sell_notional_usdc',0):.2f}
-    </div>
-    <div style="background:rgba(56,138,221,.10);border:1px solid rgba(56,138,221,.35);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#cbd5e1;">
-      <strong style="color:#93c5fd;">网络通道：</strong>{proxy_text}
-      &nbsp;·&nbsp;<strong style="color:#93c5fd;">出口：</strong>{proxy_exit_text}
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>订单ID</th><th>方向</th><th>用途</th><th>市场</th>
-          <th>价格</th><th>份额</th><th>名义金额</th><th>状态</th><th>更新时间</th>
-        </tr>
-      </thead>
-      <tbody>{pending_rows}</tbody>
-    </table>
-  </div>
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>当前持仓明细</h2><p>Open positions</p></div>
+        <span class="panel-meta">Best Bid 计价</span>
+      </div>
+      <div class="panel-note">按真实买一价估值；初始浮亏反映盘口买卖价差。</div>
+      <div class="scroll-region" data-scroll-key="positions" tabindex="0" role="region" aria-label="当前持仓明细，可滚动">
+        <table class="positions-table">
+          <thead><tr><th>方向</th><th>预测市场问题</th><th>买入价 Ask</th><th>现买一价 Bid</th><th>模型概率 Edge</th><th>投入本金</th><th>清算市值</th><th>实时浮盈亏</th><th>建仓时间</th><th>盘口更新</th></tr></thead>
+          <tbody>{open_rows}</tbody>
+        </table>
+      </div>
+    </section>
 
-  <div class="section">
-    <h2><span>账户净值走势 (Equity Curve)</span> <span class="sub">来自 state/portfolio.json · equity_curve</span></h2>
-    <div style="position:relative;height:280px;">
-      {equity_svg}
-    </div>
-  </div>
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>在途挂单账本</h2><p>Pending orders</p></div>
+        <span class="panel-meta">{pending_summary.get('blocking',0)} 阻塞 / {pending_summary.get('total',0)} 总计</span>
+      </div>
+      <div class="order-status">
+        <div class="status-row"><strong>单实例锁</strong><span title="{lock_text}">{lock_text}</span></div>
+        <div class="status-row"><strong>在途名义</strong><span>买 ${pending_summary.get('open_buy_notional_usdc',0):.2f} · 卖 ${pending_summary.get('open_sell_notional_usdc',0):.2f}</span></div>
+        <div class="status-row"><strong>网络通道</strong><span title="{proxy_text} · {proxy_exit_text}">{proxy_text} · {proxy_exit_text}</span></div>
+      </div>
+      <div class="scroll-region" data-scroll-key="orders" tabindex="0" role="region" aria-label="在途挂单账本，可滚动">
+        <table class="orders-table">
+          <thead><tr><th>订单ID</th><th>方向</th><th>用途</th><th>市场</th><th>价格</th><th>份额</th><th>名义金额</th><th>状态</th><th>更新时间</th></tr></thead>
+          <tbody>{pending_rows}</tbody>
+        </table>
+      </div>
+    </section>
 
-  <div class="section">
-    <h2><span>当前持仓明细 (按实盘买一价 Best Bid 实时计价)</span> <span class="sub">刚买入时浮亏等于盘口买卖价差 (Spread)，拒绝中间价幻觉</span></h2>
-    <table>
-      <thead>
-        <tr>
-          <th>方向</th><th>预测市场问题</th><th>买入价(Ask)</th><th>现买一价(Bid)</th>
-          <th>模型概率(Edge)</th><th>投入本金</th><th>当前清算市值</th><th>实时浮盈亏</th><th>建仓时间</th><th>盘口更新</th>
-        </tr>
-      </thead>
-      <tbody>{open_rows}</tbody>
-    </table>
-  </div>
+    {error_section}
 
-  <div class="section">
-    <h2><span>已平仓历史记录 (Closed Trades)</span></h2>
-    <table>
-      <thead>
-        <tr>
-          <th>方向</th><th>市场</th><th>开仓价</th><th>平仓价(Bid)</th><th>本金</th><th>已实现盈亏</th><th>平仓触发原因</th><th>平仓时间</th>
-        </tr>
-      </thead>
-      <tbody>{closed_rows}</tbody>
-    </table>
-  </div>
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>已平仓历史记录</h2><p>Closed trades</p></div>
+        <span class="panel-meta">最近 {min(len(state.get('closed_trades', [])), 15)} 笔</span>
+      </div>
+      <div class="scroll-region" data-scroll-key="closed" tabindex="0" role="region" aria-label="已平仓历史记录，可滚动">
+        <table class="closed-table">
+          <thead><tr><th>方向</th><th>市场</th><th>开仓价</th><th>平仓价 Bid</th><th>本金</th><th>已实现盈亏</th><th>平仓触发原因</th><th>平仓时间</th></tr></thead>
+          <tbody>{closed_rows}</tbody>
+        </table>
+      </div>
+    </section>
 
-  <div class="section">
-    <h2><span>最近风控门与特征扫描日志 (Signals & Skips Audit)</span> <span class="sub">事实由代码在 Logit 空间计算</span></h2>
-    <table>
-      <thead>
-        <tr>
-          <th>时间</th><th>动作</th><th>规则代码</th><th>市场</th><th>量化指标与原因明细</th>
-        </tr>
-      </thead>
-      <tbody>{decision_rows}</tbody>
-    </table>
-  </div>
-
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>风控门与特征扫描</h2><p>Signals & skips</p></div>
+        <span class="panel-meta">Logit 空间</span>
+      </div>
+      <div class="scroll-region" data-scroll-key="signals" tabindex="0" role="region" aria-label="风控与扫描日志，可滚动">
+        <table class="signals-table">
+          <thead><tr><th>时间</th><th>动作</th><th>规则代码</th><th>市场</th><th>量化指标与原因明细</th></tr></thead>
+          <tbody>{decision_rows}</tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+(() => {{
+  const regions = document.querySelectorAll('[data-scroll-key]');
+  regions.forEach((region) => {{
+    const key = 'pm-dashboard:' + region.dataset.scrollKey;
+    try {{
+      const saved = JSON.parse(sessionStorage.getItem(key) || '[0,0]');
+      region.scrollTop = Number(saved[0]) || 0;
+      region.scrollLeft = Number(saved[1]) || 0;
+    }} catch (_) {{}}
+    let frame = null;
+    region.addEventListener('scroll', () => {{
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {{
+        try {{ sessionStorage.setItem(key, JSON.stringify([region.scrollTop, region.scrollLeft])); }} catch (_) {{}}
+        frame = null;
+      }});
+    }}, {{ passive: true }});
+  }});
+}})();
+</script>
 </body>
 </html>
 """
