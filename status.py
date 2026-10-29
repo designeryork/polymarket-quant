@@ -146,13 +146,16 @@ def print_report():
         f"EOA 闲置: {st.get('eoa_idle_pusd', 0):.6f} pUSD | 实际持仓: {len(st['open_positions'])} 个"
     )
 
-    # 在途挂单账本 + 单实例锁（确认没有重复实例、没有悬挂卖单）
+    # 在途挂单账本 + 单实例锁 + 网络通道（确认没有重复实例、没有悬挂卖单、走的是哪条线路）
     try:
         import order_ledger
         import single_instance
+        import proxy_detector
 
         pending = order_ledger.summary()
         lock = single_instance.lock_status()
+        proxy = proxy_detector.detect_proxy()
+        exit_info = proxy.get("exit") or {}
         print("-" * 76)
         print(
             f"  在途挂单账本     : 共 {pending.get('total', 0)} 笔 | 阻塞中 {pending.get('blocking', 0)} 笔 | "
@@ -167,6 +170,17 @@ def print_report():
             )
         else:
             print("  单实例锁         : 未持有（当前无后台循环在运行）")
+        proxy_text = proxy.get("proxy_url") or "直连（未使用代理）"
+        print(
+            f"  网络通道         : {proxy_text} | 延迟 {proxy.get('latency_s', 0)}s | "
+            f"来源 {proxy.get('source','')}"
+        )
+        if exit_info.get("ip"):
+            print(
+                f"  出口位置         : {exit_info.get('ip')} | "
+                f"{exit_info.get('country','')} {exit_info.get('region','')} {exit_info.get('city','')} | "
+                f"{exit_info.get('org','')}"
+            )
     except Exception as exc:
         print(f"  在途挂单/锁状态  : [读取失败] {exc}")
 

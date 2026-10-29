@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from trading_error_monitor import load_trading_errors, record_trading_error
 import order_ledger
 import single_instance
+import proxy_detector
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
@@ -144,31 +145,37 @@ def binary_kelly_fraction(p_est: float, c_ask: float) -> Tuple[float, float, flo
 # ==========================================================
 class PolymarketDataLayer:
     def __init__(self):
-        self.session = requests.Session()
+        # 使用探测到的可用通道，而不是直接信任环境变量。
+        # 原因：环境变量可能指向与浏览器不同的代理端口（例如被工具链注入的转发通道），
+        # 导致浏览器正常但脚本全面超时。探测逻辑见 proxy_detector.py。
+        proxy_info = proxy_detector.detect_proxy()
+        self.proxy_url = proxy_info.get("proxy_url")
+        self.proxy_source = proxy_info.get("source", "")
+        self.session = proxy_detector.build_session()
         self.session.headers.update({"User-Agent": "PolymarketQuantAgent/1.0"})
-        # 本地代理/VPN 故障时的直连回退通道。
-        # 场景：系统级代理（如 127.0.0.1:2166）挂掉时返回 502 Tunnel 错误，
-        # 但直连反而可用。是否启用由环境变量 POLYMARKET_PROXY_FALLBACK 控制（默认开启）。
-        self._direct_session = None
+        # 探测失败时保留一条直连通道作为兜底
+        self._direct_session = requests.Session()
+        self._direct_session.headers.update({"User-Agent": "PolymarketQuantAgent/1.0"})
+        self._direct_session.trust_env = False
         self._proxy_failed = False
-        if os.getenv("POLYMARKET_PROXY_FALLBACK", "true").lower() == "true":
-            self._direct_session = requests.Session()
-            self._direct_session.headers.update({"User-Agent": "PolymarketQuantAgent/1.0"})
-            self._direct_session.trust_env = False
+        if self.proxy_url:
+            print(f"[网络通道] 已选定 {self.proxy_url}（来源：{self.proxy_source}，延迟 {proxy_info.get('latency_s', 0)}s）")
+        else:
+            print("[网络通道] 未找到可用代理，改用直连。")
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """带代理故障回退的请求。
+        """带通道故障回退的请求。
 
-        先走常规通道（尊重系统代理设置）；若遇到代理隧道错误，则改用直连重试一次。
+        优先走已探测通道；若通道本身出问题（连接被拒/隧道失败），改用直连重试一次。
         任何其它异常直接抛出，交由调用方按 fail-closed 处理。
         """
         try:
             return self.session.request(method, url, **kwargs)
-        except requests.exceptions.ProxyError:
-            if self._direct_session is None or self._proxy_failed:
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
+            if self._proxy_failed:
                 raise
             self._proxy_failed = True
-            print("[网络回退] 本地代理隧道失败，切换为直连重试一次。")
+            print("[网络回退] 代理通道异常，切换为直连重试一次。")
             return self._direct_session.request(method, url, **kwargs)
 
     def fetch_active_markets(self, limit: int = 30) -> List[Dict[str, Any]]:
@@ -1309,6 +1316,21 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
         lock_info = single_instance.lock_status()
     except Exception:
         lock_info = {"held": False}
+    try:
+        proxy_info = proxy_detector.detect_proxy()
+    except Exception:
+        proxy_info = {"proxy_url": None, "source": "", "latency_s": 0, "exit": {}}
+    proxy_exit = proxy_info.get("exit") or {}
+    proxy_text = (
+        f"{proxy_info.get('proxy_url')}（来源：{proxy_info.get('source','')}，延迟 {proxy_info.get('latency_s',0)}s）"
+        if proxy_info.get("proxy_url")
+        else "直连（未使用代理）"
+    )
+    proxy_exit_text = (
+        f"{proxy_exit.get('ip','')} · {proxy_exit.get('country','')} {proxy_exit.get('city','')}"
+        if proxy_exit.get("ip")
+        else "出口信息未知"
+    )
 
     pending_rows = ""
     for order in order_ledger.blocking_orders()[:20]:
@@ -1530,6 +1552,10 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
       <strong style="color:#93c5fd;">单实例锁：</strong>{lock_text}
       &nbsp;·&nbsp;<strong style="color:#93c5fd;">在途买单名义：</strong>${pending_summary.get('open_buy_notional_usdc',0):.2f}
       &nbsp;·&nbsp;<strong style="color:#93c5fd;">在途卖单名义：</strong>${pending_summary.get('open_sell_notional_usdc',0):.2f}
+    </div>
+    <div style="background:rgba(56,138,221,.10);border:1px solid rgba(56,138,221,.35);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#cbd5e1;">
+      <strong style="color:#93c5fd;">网络通道：</strong>{proxy_text}
+      &nbsp;·&nbsp;<strong style="color:#93c5fd;">出口：</strong>{proxy_exit_text}
     </div>
     <table>
       <thead>

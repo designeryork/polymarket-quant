@@ -75,6 +75,15 @@ class PolymarketV2Executor:
             api_passphrase=os.getenv("CLOB_PASSPHRASE", ""),
         )
         self.host = os.getenv("CLOB_HOST", "https://clob.polymarket.com")
+        # 让 SDK 的底层 httpx 客户端使用探测到的可用通道。
+        # 不做这一步的话，SDK 会沿用环境变量里的代理地址，
+        # 造成"requests 能连通但 CLOB 下单全部失败"的分裂现象。
+        try:
+            import proxy_detector
+
+            self._proxy_applied = proxy_detector.apply_to_clob_sdk()
+        except Exception:
+            self._proxy_applied = {"ok": False, "detail": "代理应用失败，沿用 SDK 默认配置"}
         self.client = ClobClient(self.host, key=self.private_key, chain_id=137, creds=self.creds)
 
     @staticmethod

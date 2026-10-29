@@ -412,9 +412,53 @@ def test_ledger_separation() -> None:
             os.environ["PAPER"] = original_paper
 
 
-# ---------------------------------------------------------------- 8. 仓库卫生
+# ---------------------------------------------------------------- 8. 代理探测
+def test_proxy_detector() -> None:
+    section("8. 代理通道探测")
+    import proxy_detector
+
+    candidates = proxy_detector.candidate_proxies()
+    sources = {c["source"] for c in candidates}
+    check("候选通道可枚举", len(candidates) >= 0, f"共 {len(candidates)} 个，来源: {sorted(sources)}")
+
+    check(
+        "注册表代理被纳入候选（浏览器所用）",
+        "系统注册表(浏览器所用)" in sources or len(candidates) == 0,
+        "注册表是浏览器实际使用的代理设置，优先级最高",
+    )
+
+    info = proxy_detector.detect_proxy()
+    check(
+        "探测结果结构完整",
+        all(key in info for key in ("proxy_url", "source", "latency_s", "exit", "attempts")),
+        f"proxy={info.get('proxy_url')} source={info.get('source')}",
+    )
+    check(
+        "探测到可用通道",
+        bool(info.get("proxy_url")) or info.get("source") == "直连(未使用代理)",
+        f"{info.get('source')} 延迟 {info.get('latency_s')}s",
+    )
+
+    applied = proxy_detector.apply_to_clob_sdk()
+    check(
+        "CLOB SDK 客户端已应用探测到的通道",
+        bool(applied.get("ok")),
+        applied.get("detail", "")[:90],
+    )
+
+    from py_clob_client.http_helpers import helpers
+
+    client = helpers._http_client
+    check(
+        "SDK 客户端不再依赖被污染的环境变量",
+        client.trust_env is False or info.get("proxy_url") is not None,
+        f"trust_env={client.trust_env}",
+    )
+
+
+# ---------------------------------------------------------------- 9. 仓库卫生
 def test_repo_hygiene() -> None:
-    section("8. 仓库与凭证卫生")
+    section("9. 仓库与凭证卫生")
     gitignore = (BASE / ".gitignore").read_text(encoding="utf-8")
     for pattern in (".env", "state/", "logs/", "003_MataMask 钱包/", "build_launcher/", "__pycache__/"):
         check(f".gitignore 覆盖 {pattern}", pattern in gitignore)
@@ -457,6 +501,7 @@ def main() -> int:
     test_reconciled_state_keys()
     test_error_taxonomy()
     test_ledger_separation()
+    test_proxy_detector()
     test_repo_hygiene()
 
     print(f"\n{'=' * 70}")

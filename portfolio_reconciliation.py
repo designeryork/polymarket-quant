@@ -45,20 +45,21 @@ def finite_number(value: Any, field: str) -> float:
 
 
 def build_session() -> requests.Session:
-    """构建带代理故障直连回退的会话。
+    """构建使用探测到的可用通道的会话。
 
-    场景：系统级代理（VPN 客户端）挂掉时返回 502 Tunnel 错误，但直连可用。
-    代理故障属于本机链路问题，不应导致对账永久失败而阻断整个交易流程。
-    回退可通过环境变量 POLYMARKET_PROXY_FALLBACK 关闭。
+    不直接信任环境变量：环境变量可能指向与浏览器不同的代理端口
+    （实测事故：环境变量指向工具链自带的转发通道，对 Polymarket 返回 502，
+    而浏览器使用的代理一切正常）。探测逻辑见 proxy_detector.py。
     """
-    session = requests.Session()
+    import proxy_detector
+
+    session = proxy_detector.build_session()
     session.headers.update({"User-Agent": "PolymarketPortfolioReconciliation/1.0"})
     return session
 
 
 def build_direct_session() -> Optional[requests.Session]:
-    if os.getenv("POLYMARKET_PROXY_FALLBACK", "true").lower() != "true":
-        return None
+    """直连回退会话。"""
     direct = requests.Session()
     direct.headers.update({"User-Agent": "PolymarketPortfolioReconciliation/1.0"})
     direct.trust_env = False
@@ -77,11 +78,11 @@ def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> Li
                 params={"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0},
                 timeout=25,
             )
-        except requests.exceptions.ProxyError:
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
             if direct is None or proxy_failed:
                 raise
             proxy_failed = True
-            print("[网络回退] 本地代理隧道失败，切换为直连重试。")
+            print("[网络回退] 代理通道异常，切换为直连重试。")
             response = direct.get(
                 f"{DATA_API}/{endpoint}",
                 params={"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0},
