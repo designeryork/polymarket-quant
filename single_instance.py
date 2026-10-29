@@ -196,12 +196,20 @@ def release_lock() -> None:
 
 
 def lock_status() -> dict:
-    """返回锁的当前状态，用于面板展示。"""
+    """返回锁的当前状态，用于面板展示与启动器判定。
+
+    区分三种状态：
+    * held=False          —— 没有锁文件，后台未启动；
+    * held=True, alive=True  —— 正常持有，后台运行中；
+    * held=True, alive=False —— **陈旧锁**（进程已死/机器重启过），
+      启动器必须据此判定"未运行"并接管，否则会永远启动不了后台。
+    """
     path = _lock_path()
     payload = _read_lock(path) if path.exists() else None
     if not payload:
-        return {"held": False, "path": str(path)}
+        return {"held": False, "path": str(path), "alive": False}
     pid = int(payload.get("pid") or 0)
+    alive = _pid_alive(pid)
     return {
         "held": True,
         "path": str(path),
@@ -209,7 +217,8 @@ def lock_status() -> dict:
         "role": payload.get("role"),
         "host": payload.get("host"),
         "started_at_utc": payload.get("started_at_utc"),
-        "alive": _pid_alive(pid),
+        "alive": alive,
+        "stale": not alive,
     }
 
 

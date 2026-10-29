@@ -22,22 +22,28 @@ def loop_running() -> bool:
 
     优先使用原子 PID 锁文件（内核级排他，可识别 pythonw.exe 与 PyInstaller 打包体）；
     回退到命令行匹配，仅用于锁文件缺失的兼容场景。
+
+    重要：锁文件存在不等于进程存活。机器重启或进程被强杀后会留下陈旧锁，
+    此时必须按"进程是否存活"判断，否则会误报"已在运行"而永远启动不了后台。
     """
     try:
         sys.path.insert(0, str(BASE))
         import single_instance
 
         status = single_instance.lock_status()
-        if status.get("held"):
+        # 只有"锁存在 且 持锁进程仍存活"才算真正在运行
+        if status.get("held") and status.get("alive"):
             return True
     except Exception:
         pass
     try:
+        # 回退匹配必须转义正则并锚定，否则 `paper_copy.py --loop` 这类
+        # 其它项目进程会被 `.` 通配误判为"引擎已在运行"。
         out = subprocess.check_output(
             [
                 "powershell", "-NoProfile", "-Command",
                 "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
-                "Where-Object { $_.CommandLine -match 'quant_engine.py --loop' } | "
+                "Where-Object { $_.CommandLine -match 'quant_engine\\.py\\s+--loop' } | "
                 "Select-Object -ExpandProperty ProcessId",
             ],
             text=True,
@@ -83,16 +89,34 @@ def main() -> int:
         return 0
     stdout = open(LOG_DIR / "loop_stdout.log", "a", encoding="utf-8")
     stderr = open(LOG_DIR / "loop_stderr.log", "a", encoding="utf-8")
-    creation = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    # 必须让子进程完全脱离父进程与作业对象，否则启动器一退出，
+    # 子进程就会被连带终止（表现为"exe 显示启动成功，但后台跑了几轮就没了"）。
+    # CREATE_NO_WINDOW 只隐藏窗口，不提供脱离语义；
+    # DETACHED_PROCESS + CREATE_NEW_PROCESS_GROUP 才是正确的组合。
+    creation = (
+        getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    )
     proc = subprocess.Popen(
         [str(PY), "quant_engine.py", "--loop", "--interval", "180"],
         cwd=str(BASE),
         stdout=stdout,
         stderr=stderr,
         creationflags=creation,
+        close_fds=True,
     )
-    time.sleep(1.5)
-    if loop_running() or proc.poll() is None:
+    time.sleep(2.5)
+    # 以"锁文件是否被活进程持有"作为成功判据，比 proc.poll() 更可靠：
+    # 引擎启动时会先抢单实例锁，拿到锁才说明真的跑起来了。
+    lock_ok = False
+    try:
+        import single_instance
+
+        lock_ok = single_instance.lock_status().get("alive") is True
+    except Exception:
+        lock_ok = proc.poll() is None
+    if lock_ok or proc.poll() is None:
         print(f"[OK] 已启动无人值守：每 3 分钟巡检 (PID {proc.pid})")
         print(f"日志: {LOG_DIR / 'loop_stdout.log'}")
     else:
