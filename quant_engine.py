@@ -873,20 +873,45 @@ def run_quant_cycle(max_markets: int = 25) -> Dict[str, Any]:
             continue
 
         # 检查 YES 与 NO 两个方向，择优分析价格落在 [0.15, 0.85] 的一侧
+        # 说明：二元市场 YES 卖一 + NO 卖一 ≈ 1，因此两侧的区间判定是互补的 ——
+        # YES 越界必然导致 NO 也越界。该过滤的真实含义是「市场是否已形成明确共识」。
         picked_side = None
+        side_asks: Dict[str, Any] = {}
         for idx in (0, 1):
             tid = str(token_ids[idx])
             if tid in held_token_ids:
                 continue
             book = data_layer.fetch_orderbook(tid)
             if not book:
+                side_asks[f"side{idx}_book"] = None
                 continue
+            label = outcomes[idx] if idx < len(outcomes) else f"Outcome_{idx}"
+            side_asks[f"side{idx}_ask"] = book["best_ask"]
+            side_asks[f"side{idx}_bid"] = book["best_bid"]
+            side_asks[f"side{idx}_label"] = label
             if 0.15 <= book["best_ask"] <= 0.85:
-                picked_side = (idx, tid, outcomes[idx] if idx < len(outcomes) else f"Outcome_{idx}", book)
+                picked_side = (idx, tid, label, book)
                 break
 
         if not picked_side:
-            record_skip(question, "OUT_OF_PROB_RANGE", "YES/NO 卖一价均不在 [0.15, 0.85] 核心可交易区间")
+            # 记录两侧实际价格，便于从审计日志直接判断是「共识已形成」还是「盘口缺失」
+            detail = "YES/NO 卖一价均不在 [0.15, 0.85] 核心可交易区间"
+            yes_ask = side_asks.get("side0_ask")
+            no_ask = side_asks.get("side1_ask")
+            if yes_ask is None and no_ask is None:
+                detail = "YES/NO 两侧盘口均缺失，无法取得卖一价"
+            else:
+                parts = []
+                for idx, key in ((0, "YES"), (1, "NO")):
+                    ask = side_asks.get(f"side{idx}_ask")
+                    if ask is None:
+                        parts.append(f"{key}=无盘口")
+                    elif ask > 0.85:
+                        parts.append(f"{key}={ask:.3f}(>0.85)")
+                    else:
+                        parts.append(f"{key}={ask:.3f}(<0.15)")
+                detail = f"YES/NO 卖一价均不在 [0.15, 0.85] 核心可交易区间 | {' '.join(parts)}"
+            record_skip(question, "OUT_OF_PROB_RANGE", detail, side_asks)
             continue
 
         side_idx, token_id, outcome_label, book = picked_side
@@ -1777,7 +1802,8 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
 </body>
 </html>
 """
-    DASHBOARD_HTML_FILE.write_text(html, encoding="utf-8")
+    clean_html = "\n".join(line.rstrip() for line in html.splitlines()) + "\n"
+    DASHBOARD_HTML_FILE.write_text(clean_html, encoding="utf-8")
 
 
 def refresh_dashboard_from_disk() -> None:
