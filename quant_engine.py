@@ -34,9 +34,22 @@ STATE_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
 
 PORTFOLIO_FILE = STATE_DIR / "portfolio.json"
+PAPER_PORTFOLIO_FILE = STATE_DIR / "portfolio_paper.json"
 SIGNALS_LOG_FILE = LOGS_DIR / "signals_and_skips.jsonl"
 DASHBOARD_HTML_FILE = BASE_DIR / "dashboard.html"
 STOP_FILE = BASE_DIR / "STOP"
+
+
+def portfolio_path() -> Path:
+    """返回当前模式对应的账本文件路径。
+
+    PAPER 与 LIVE 必须使用不同的账本文件。
+    旧实现两者共用 `state/portfolio.json`，导致任何一次模拟运行都会覆盖实盘账本
+    （持仓、已实现盈亏、对账状态全部被纸面数据污染）。
+    """
+    if os.getenv("PAPER", "true").lower() == "true":
+        return PAPER_PORTFOLIO_FILE
+    return PORTFOLIO_FILE
 
 GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets"
 CLOB_HOST = os.getenv("CLOB_HOST", "https://clob.polymarket.com")
@@ -133,6 +146,30 @@ class PolymarketDataLayer:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "PolymarketQuantAgent/1.0"})
+        # 本地代理/VPN 故障时的直连回退通道。
+        # 场景：系统级代理（如 127.0.0.1:2166）挂掉时返回 502 Tunnel 错误，
+        # 但直连反而可用。是否启用由环境变量 POLYMARKET_PROXY_FALLBACK 控制（默认开启）。
+        self._direct_session = None
+        self._proxy_failed = False
+        if os.getenv("POLYMARKET_PROXY_FALLBACK", "true").lower() == "true":
+            self._direct_session = requests.Session()
+            self._direct_session.headers.update({"User-Agent": "PolymarketQuantAgent/1.0"})
+            self._direct_session.trust_env = False
+
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """带代理故障回退的请求。
+
+        先走常规通道（尊重系统代理设置）；若遇到代理隧道错误，则改用直连重试一次。
+        任何其它异常直接抛出，交由调用方按 fail-closed 处理。
+        """
+        try:
+            return self.session.request(method, url, **kwargs)
+        except requests.exceptions.ProxyError:
+            if self._direct_session is None or self._proxy_failed:
+                raise
+            self._proxy_failed = True
+            print("[网络回退] 本地代理隧道失败，切换为直连重试一次。")
+            return self._direct_session.request(method, url, **kwargs)
 
     def fetch_active_markets(self, limit: int = 30) -> List[Dict[str, Any]]:
         params = {
@@ -143,7 +180,7 @@ class PolymarketDataLayer:
             "ascending": "false",
         }
         try:
-            resp = self.session.get(GAMMA_MARKETS_URL, params=params, timeout=12)
+            resp = self._request("GET", GAMMA_MARKETS_URL, params=params, timeout=12)
             resp.raise_for_status()
             data = resp.json()
             return data if isinstance(data, list) else []
@@ -153,8 +190,8 @@ class PolymarketDataLayer:
 
     def fetch_orderbook(self, token_id: str) -> Optional[Dict[str, Any]]:
         try:
-            resp = self.session.get(
-                f"{CLOB_HOST}/book", params={"token_id": token_id}, timeout=8
+            resp = self._request(
+                "GET", f"{CLOB_HOST}/book", params={"token_id": token_id}, timeout=8
             )
             if resp.status_code != 200:
                 return None
@@ -207,8 +244,8 @@ class PolymarketDataLayer:
         try:
             markets: List[Dict[str, Any]] = []
             try:
-                resp = self.session.get(
-                    f"https://gamma-api.polymarket.com/events/{event_id}", timeout=10
+                resp = self._request(
+                    "GET", f"https://gamma-api.polymarket.com/events/{event_id}", timeout=10
                 )
                 if resp.status_code == 200:
                     payload = resp.json()
@@ -217,7 +254,8 @@ class PolymarketDataLayer:
             except Exception:
                 pass
             if not markets:
-                resp = self.session.get(
+                resp = self._request(
+                    "GET",
                     "https://gamma-api.polymarket.com/events",
                     params={"id": event_id},
                     timeout=10,
@@ -284,7 +322,8 @@ class PolymarketDataLayer:
         保证 YES/NO 概率互补对称。
         """
         try:
-            resp = self.session.get(
+            resp = self._request(
+                "GET",
                 f"{CLOB_HOST}/prices-history",
                 params={"market": token_id, "interval": "1d", "fidelity": 15},
                 timeout=6,
@@ -326,9 +365,10 @@ class RiskEnvelope:
 
 
 def load_portfolio(risk: RiskEnvelope) -> Dict[str, Any]:
-    if PORTFOLIO_FILE.exists():
+    target = portfolio_path()
+    if target.exists():
         try:
-            return json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8"))
+            return json.loads(target.read_text(encoding="utf-8"))
         except Exception:
             pass
     init_state = {
@@ -362,13 +402,16 @@ def load_portfolio(risk: RiskEnvelope) -> Dict[str, Any]:
         },
         "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
-    PORTFOLIO_FILE.write_text(json.dumps(init_state, indent=2, ensure_ascii=False), encoding="utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(init_state, indent=2, ensure_ascii=False), encoding="utf-8")
     return init_state
 
 
 def save_portfolio(state: Dict[str, Any]) -> None:
     state["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    PORTFOLIO_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    target = portfolio_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 
@@ -424,6 +467,62 @@ def compute_total_exposure(state: Dict[str, Any]) -> float:
         float(pos.get("cost_usdc") or 0.0) for pos in state.get("open_positions", [])
     )
     return round(position_exposure + order_ledger.open_buy_notional(), 6)
+
+
+def cleanup_dangling_sell_orders(state: Dict[str, Any]) -> int:
+    """清理已无对应持仓的挂卖单（止盈单/平仓单）。
+
+    背景：仓位可能因市场结算、被赎回或人工干预而消失，但挂在 CLOB 上的 GTC 卖单
+    （`expiration="0"` 永不过期）会继续留在链上订单簿里。之后一旦有其它逻辑尝试
+    卖出同一 token，就会触发 `not enough balance / allowance`，或让卖单在错误的价格上成交。
+
+    只处理"链上已无该 token 持仓"的卖单；部分成交的仓位由对账器负责核销。
+    返回成功撤销的单数。
+    """
+    live_token_ids = {str(pos.get("token_id") or "") for pos in state.get("open_positions", [])}
+    live_token_ids.discard("")
+    if not live_token_ids:
+        # 没有任何持仓时，所有卖单都是悬挂单
+        pass
+
+    cancelled = 0
+    try:
+        executor = get_live_executor()
+    except Exception:
+        return 0
+
+    for order in order_ledger.blocking_orders():
+        if str(order.get("side", "")).upper() != "SELL":
+            continue
+        token_id = str(order.get("token_id") or "")
+        if token_id and token_id in live_token_ids:
+            continue
+        order_id = str(order.get("order_id") or "")
+        if not order_id:
+            continue
+        try:
+            executor.cancel_order(order_id)
+            order_ledger.update_status(
+                order_id, order_ledger.STATUS_CANCELLED, notes="对应持仓已消失，撤销悬挂卖单"
+            )
+            append_audit_log({
+                "action": "DANGLING_SELL_CANCELLED",
+                "orderID": order_id,
+                "token_id": token_id,
+                "intent": order.get("intent"),
+            })
+            cancelled += 1
+        except Exception as exc:
+            append_audit_log({
+                "action": "DANGLING_SELL_CANCEL_FAILED",
+                "orderID": order_id,
+                "error": str(exc)[:200],
+            })
+            record_trading_error(
+                "CANCEL_TP", exc, str(order.get("market_question") or ""),
+                str(order.get("outcome") or ""), context=f"撤销悬挂卖单 {order_id}",
+            )
+    return cancelled
 
 
 def append_audit_log(record: Dict[str, Any]) -> None:
@@ -687,6 +786,15 @@ def run_quant_cycle(max_markets: int = 25) -> Dict[str, Any]:
 
     # 1. 先更新已有持仓的真实买一价估值与平仓检查（熔断期间仍允许平仓）
     evaluate_existing_positions(state, data_layer)
+
+    # 1b. 清理已无对应持仓的悬挂卖单（止盈/平仓单），避免误成交或余额不足错误
+    if not risk.paper_mode and risk.allow_live:
+        try:
+            cleaned = cleanup_dangling_sell_orders(state)
+            if cleaned:
+                print(f"[悬挂单清理] 已撤销 {cleaned} 笔无对应持仓的卖单。")
+        except Exception as cleanup_error:
+            print(f"[悬挂单清理] 跳过（不影响本轮其它逻辑）: {cleanup_error}")
 
     # 2. UTC 自然日亏损熔断（相对当日 start_equity）
     ensure_daily_stats(state)
@@ -1192,6 +1300,40 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
     <div style="font-size:13px;color:#fecdd3;margin-top:6px;">检测到 STOP 文件。当前页面仅展示最后一次对账快照，不会继续扫描、开仓或平仓；链上订单与资产不会因此自动撤销。</div>
   </div>"""
 
+    # 在途挂单账本 + 单实例锁状态（用于确认没有重复实例、没有悬挂卖单）
+    try:
+        pending_summary = order_ledger.summary()
+    except Exception:
+        pending_summary = {"total": 0, "by_status": {}, "blocking": 0}
+    try:
+        lock_info = single_instance.lock_status()
+    except Exception:
+        lock_info = {"held": False}
+
+    pending_rows = ""
+    for order in order_ledger.blocking_orders()[:20]:
+        pending_rows += f"""
+        <tr>
+            <td><code>{order.get('order_id','')[:18]}…</code></td>
+            <td><span class="badge">{order.get('side','')}</span></td>
+            <td>{order.get('intent','')}</td>
+            <td class="q-cell">{order.get('market_question','')}</td>
+            <td>{order.get('price',0):.3f}</td>
+            <td>{order.get('shares',0):.2f}</td>
+            <td>${order.get('notional_usdc',0):.2f}</td>
+            <td><span class="badge badge-skip">{order.get('status','')}</span></td>
+            <td class="sub">{order.get('updated_at_utc','')}</td>
+        </tr>
+        """
+    if not pending_rows:
+        pending_rows = '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:18px;">当前无在途挂单（所有订单均已离簿并经只读对账确认）</td></tr>'
+
+    lock_text = (
+        f"已锁定 PID {lock_info.get('pid')}（{lock_info.get('role','')}，启动于 {lock_info.get('started_at_utc','')}）"
+        if lock_info.get("held") and lock_info.get("alive")
+        else ("锁文件存在但持锁进程已退出（陈旧锁）" if lock_info.get("held") else "未持有锁（当前为一次性运行或后台未启动）")
+    )
+
     def parse_event_time(value):
         try:
             parsed = datetime.fromisoformat(str(value).replace(" UTC", ""))
@@ -1343,7 +1485,7 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
       </div>
     </div>
     <div style="text-align:right;">
-      <div class="sub">最后更新时间 (每15秒自动刷新)</div>
+      <div class="sub">最后更新时间 (页面每15秒重载，数据随引擎巡检周期更新)</div>
       <div style="font-size:14px;font-weight:600;">{state['last_updated']}</div>
     </div>
   </div>
@@ -1366,7 +1508,7 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
     <div class="kpi-card">
       <div class="kpi-label">可用现金 (Available Cash)</div>
       <div class="kpi-val">${state['cash_usdc']:.2f}</div>
-      <div class="kpi-sub">单笔上限: $2.00 | 1/4 凯利动态仓位</div>
+      <div class="kpi-sub">单笔上限: $2.00 · 1/4 凯利目标仓位 (受 $1.00 最小下单额约束)</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">当前持仓数 (Open Positions)</div>
@@ -1381,6 +1523,24 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
   </div>
 
   {error_section}
+
+  <div class="section">
+    <h2><span>在途挂单账本 (Pending Orders)</span> <span class="sub">防止重复下单与超额卖出 · 共 {pending_summary.get('total',0)} 笔，其中阻塞中 {pending_summary.get('blocking',0)} 笔</span></h2>
+    <div style="background:rgba(56,138,221,.10);border:1px solid rgba(56,138,221,.35);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#cbd5e1;">
+      <strong style="color:#93c5fd;">单实例锁：</strong>{lock_text}
+      &nbsp;·&nbsp;<strong style="color:#93c5fd;">在途买单名义：</strong>${pending_summary.get('open_buy_notional_usdc',0):.2f}
+      &nbsp;·&nbsp;<strong style="color:#93c5fd;">在途卖单名义：</strong>${pending_summary.get('open_sell_notional_usdc',0):.2f}
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>订单ID</th><th>方向</th><th>用途</th><th>市场</th>
+          <th>价格</th><th>份额</th><th>名义金额</th><th>状态</th><th>更新时间</th>
+        </tr>
+      </thead>
+      <tbody>{pending_rows}</tbody>
+    </table>
+  </div>
 
   <div class="section">
     <h2><span>账户净值走势 (Equity Curve)</span> <span class="sub">来自 state/portfolio.json · equity_curve</span></h2>
@@ -1433,7 +1593,10 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
 
 
 def refresh_dashboard_from_disk() -> None:
-    state = json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8"))
+    target = portfolio_path()
+    if not target.exists():
+        return
+    state = json.loads(target.read_text(encoding="utf-8"))
     generate_dashboard_html(state)
 
 
@@ -1444,9 +1607,11 @@ if __name__ == "__main__":
     parser.add_argument("--reset", action="store_true", help="重置 10U 模拟账户状态")
     args = parser.parse_args()
 
-    if args.reset and PORTFOLIO_FILE.exists():
-        PORTFOLIO_FILE.unlink()
-        print("[重置完成] 已将模拟账户恢复为初始 $10.00 USDC。")
+    if args.reset:
+        target = portfolio_path()
+        if target.exists():
+            target.unlink()
+            print(f"[重置完成] 已将{('模拟' if target == PAPER_PORTFOLIO_FILE else '实盘')}账本重置为初始 $10.00 USDC：{target.name}")
 
     if args.loop:
         print(f"启动无人值守量化循环 (间隔 {args.interval} 秒)... 按 Ctrl+C 或创建 STOP 文件停止。")

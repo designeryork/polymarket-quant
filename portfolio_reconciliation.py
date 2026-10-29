@@ -44,15 +44,49 @@ def finite_number(value: Any, field: str) -> float:
     return number
 
 
+def build_session() -> requests.Session:
+    """构建带代理故障直连回退的会话。
+
+    场景：系统级代理（VPN 客户端）挂掉时返回 502 Tunnel 错误，但直连可用。
+    代理故障属于本机链路问题，不应导致对账永久失败而阻断整个交易流程。
+    回退可通过环境变量 POLYMARKET_PROXY_FALLBACK 关闭。
+    """
+    session = requests.Session()
+    session.headers.update({"User-Agent": "PolymarketPortfolioReconciliation/1.0"})
+    return session
+
+
+def build_direct_session() -> Optional[requests.Session]:
+    if os.getenv("POLYMARKET_PROXY_FALLBACK", "true").lower() != "true":
+        return None
+    direct = requests.Session()
+    direct.headers.update({"User-Agent": "PolymarketPortfolioReconciliation/1.0"})
+    direct.trust_env = False
+    return direct
+
+
 def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     limit = 500
+    direct = build_direct_session()
+    proxy_failed = False
     for offset in range(0, 10000, limit):
-        response = session.get(
-            f"{DATA_API}/{endpoint}",
-            params={"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0},
-            timeout=25,
-        )
+        try:
+            response = session.get(
+                f"{DATA_API}/{endpoint}",
+                params={"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0},
+                timeout=25,
+            )
+        except requests.exceptions.ProxyError:
+            if direct is None or proxy_failed:
+                raise
+            proxy_failed = True
+            print("[网络回退] 本地代理隧道失败，切换为直连重试。")
+            response = direct.get(
+                f"{DATA_API}/{endpoint}",
+                params={"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0},
+                timeout=25,
+            )
         response.raise_for_status()
         batch = response.json()
         if not isinstance(batch, list):
@@ -105,8 +139,7 @@ def read_open_orders() -> List[Dict[str, Any]]:
 def fetch_sources() -> Dict[str, Any]:
     eoa = Web3.to_checksum_address(os.environ["WALLET_ADDRESS"])
     deposit_wallet = Web3.to_checksum_address(os.environ["DEPOSIT_WALLET"])
-    session = requests.Session()
-    session.headers.update({"User-Agent": "PolymarketPortfolioReconciliation/1.0"})
+    session = build_session()
     activity = fetch_paginated(session, "activity", deposit_wallet)
     positions = fetch_paginated(session, "positions", deposit_wallet)
     balances = read_pusd_balances(eoa, deposit_wallet)
@@ -415,6 +448,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only chain/CLOB reconciliation; --apply updates only local JSON")
     parser.add_argument("--apply", action="store_true", help="Back up and atomically update the local portfolio")
     args = parser.parse_args()
+
+    # 本工具始终读取链上真实余额与 CLOB 真实成交，因此它是一个"实盘账本"工具。
+    # 即便环境变量 PAPER=true，--apply 写入的仍是实盘账本 —— 这里明确提示，避免误用。
+    if args.apply and os.getenv("PAPER", "true").lower() == "true":
+        print("[提示] 当前环境为 PAPER=true，但本工具始终依据链上真实数据重建**实盘账本**。")
+        print("       模拟盘账本请使用 state/portfolio_paper.json，与实盘账本相互隔离。")
+
     state = reconcile(apply=args.apply, backup=args.apply)
     print_summary(state, args.apply)
     if args.apply:

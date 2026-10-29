@@ -32,6 +32,30 @@ CATEGORIES = {
         "title": "订单金额或精度不符合规则",
         "handling": "订单未成交；按市场最小金额与精度重新计算，不能将其记为已成交。",
     },
+    "PROXY_ERROR": {
+        "title": "本地代理/VPN 通道故障",
+        "handling": "请求未能经代理建立隧道，多为本地代理客户端异常（未连接/节点故障）。这是本机网络问题，不是 Polymarket 拒绝交易。修复代理后会自动恢复；不要据此判断账户或地区状态。",
+    },
+    "RATE_LIMITED": {
+        "title": "接口限流（HTTP 429）",
+        "handling": "请求被限流。降低巡检频率并退避重试，遵守 Retry-After；不要固定间隔硬撞接口。",
+    },
+    "NETWORK_TIMEOUT": {
+        "title": "连接超时",
+        "handling": "接口未在超时窗口内响应。本轮已跳过，未修改账本也未提交订单；恢复后自动重试。",
+    },
+    "CONNECTION_RESET": {
+        "title": "连接被重置（10054 等）",
+        "handling": "已有连接被中途断开，可能来自本地网络、代理或远端服务。连续发生时应检查本地代理与防火墙。",
+    },
+    "SSL_ERROR": {
+        "title": "TLS/SSL 握手异常",
+        "handling": "加密通道建立失败，通常与代理中间人或链路不稳定有关。本轮已跳过，未产生交易动作。",
+    },
+    "DNS_ERROR": {
+        "title": "域名解析失败",
+        "handling": "无法解析目标域名，属于本机 DNS 或网络配置问题。未产生任何交易动作。",
+    },
     "TRADING_ERROR": {
         "title": "交易或执行异常",
         "handling": "本次操作未确认成功；保持账本不变并检查原始错误，恢复前先只读对账。",
@@ -44,6 +68,16 @@ STAGE_LABELS = {
     "CANCEL_TP": "撤销止盈单",
     "RECONCILIATION": "账本对账",
     "ENGINE": "交易引擎",
+}
+
+# 网络类错误不涉及交易本身，单独标记严重级别，便于面板区分"交易失败"与"网络不通"
+NETWORK_CATEGORIES = {
+    "PROXY_ERROR",
+    "RATE_LIMITED",
+    "NETWORK_TIMEOUT",
+    "CONNECTION_RESET",
+    "SSL_ERROR",
+    "DNS_ERROR",
 }
 
 
@@ -63,7 +97,29 @@ def sanitize_error(error: Any, limit: int = 800) -> str:
 
 
 def classify_error(error: Any) -> str:
+    """把原始异常映射到分类。
+
+    网络类故障（代理、限流、超时、重置、SSL、DNS）必须与"交易被拒"分开：
+    前者是本机链路问题、恢复后自动重试即可；后者涉及账户资格与策略正确性，
+    两者混为一谈会让告警失去判断价值。
+    """
     text = str(error).lower()
+
+    # --- 网络类（优先判断，避免被泛化的 TRADING_ERROR 吞掉）---
+    if "proxyerror" in text or "tunnel connection failed" in text or "unable to connect to proxy" in text:
+        return "PROXY_ERROR"
+    if "429" in text or "too many requests" in text or "rate limit" in text:
+        return "RATE_LIMITED"
+    if "read timed out" in text or "connecttimeout" in text or "timed out" in text or "timeout" in text:
+        return "NETWORK_TIMEOUT"
+    if "10054" in text or "connectionreset" in text or "connection reset" in text or "remote end closed" in text:
+        return "CONNECTION_RESET"
+    if "ssl" in text and ("eof" in text or "error" in text or "unexpected" in text):
+        return "SSL_ERROR"
+    if "name or service not known" in text or "nodename nor servname" in text or "getaddrinfo" in text:
+        return "DNS_ERROR"
+
+    # --- 交易与账户类 ---
     if "trading restricted in your region" in text or ("403" in text and "region" in text):
         return "REGION_RESTRICTED"
     if "poly_1271" in text or "invalid signature" in text or "signature too short" in text:
@@ -114,7 +170,7 @@ def record_trading_error(
         "stage_label": STAGE_LABELS.get(stage, stage),
         "category": category,
         "category_label": CATEGORIES[category]["title"],
-        "severity": "critical",
+        "severity": "warning" if category in NETWORK_CATEGORIES else "critical",
         "question": question,
         "side": side,
         "detail": detail,

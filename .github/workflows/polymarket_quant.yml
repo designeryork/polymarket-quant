@@ -36,8 +36,12 @@ jobs:
           CLOB_API_KEY: ${{ secrets.CLOB_API_KEY }}
           CLOB_SECRET: ${{ secrets.CLOB_SECRET }}
           CLOB_PASSPHRASE: ${{ secrets.CLOB_PASSPHRASE }}
-          PAPER: ${{ secrets.PAPER || 'false' }}
-          ALLOW_LIVE: ${{ secrets.ALLOW_LIVE || 'true' }}
+          # 默认必须是 PAPER。GitHub Runner 与本机不在同一台机器，
+          # 因此单实例锁（state/engine.lock）无法阻止两端同时实盘下单。
+          # 除非显式在仓库 Secrets 中同时设置 PAPER=false 与 ALLOW_LIVE=true，
+          # 否则云端只做只读巡检，绝不提交订单。
+          PAPER: ${{ secrets.PAPER || 'true' }}
+          ALLOW_LIVE: ${{ secrets.ALLOW_LIVE || 'false' }}
         run: |
           python quant_engine.py
 
@@ -45,6 +49,9 @@ jobs:
         run: |
           git config user.name "polymarket-quant-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add state/portfolio.json dashboard.html logs/
+          # state/ 与 logs/ 已被 .gitignore 排除，需用 -f 显式加入，
+          # 否则 git add 会因 "ignored by one of your .gitignore files" 直接失败。
+          git add -f state/portfolio.json state/portfolio_paper.json dashboard.html || true
+          git add -f logs/signals_and_skips.jsonl || true
           git diff --staged --quiet || git commit -m "chore: update quant state [skip ci]"
           git push

@@ -145,6 +145,31 @@ def print_report():
         f"  Deposit 可用现金 : {st['cash_usdc']:.6f} pUSD | "
         f"EOA 闲置: {st.get('eoa_idle_pusd', 0):.6f} pUSD | 实际持仓: {len(st['open_positions'])} 个"
     )
+
+    # 在途挂单账本 + 单实例锁（确认没有重复实例、没有悬挂卖单）
+    try:
+        import order_ledger
+        import single_instance
+
+        pending = order_ledger.summary()
+        lock = single_instance.lock_status()
+        print("-" * 76)
+        print(
+            f"  在途挂单账本     : 共 {pending.get('total', 0)} 笔 | 阻塞中 {pending.get('blocking', 0)} 笔 | "
+            f"在途买单 ${pending.get('open_buy_notional_usdc', 0):.2f} | "
+            f"在途卖单 ${pending.get('open_sell_notional_usdc', 0):.2f}"
+        )
+        if lock.get("held"):
+            alive = "存活" if lock.get("alive") else "已退出(陈旧锁)"
+            print(
+                f"  单实例锁         : 已持有 | PID {lock.get('pid')} | {lock.get('role','')} | "
+                f"{lock.get('started_at_utc','')} | {alive}"
+            )
+        else:
+            print("  单实例锁         : 未持有（当前无后台循环在运行）")
+    except Exception as exc:
+        print(f"  在途挂单/锁状态  : [读取失败] {exc}")
+
     print("=" * 76)
 
 
