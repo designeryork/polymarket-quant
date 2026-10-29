@@ -25,6 +25,7 @@ from trading_error_monitor import load_trading_errors, record_trading_error
 import order_ledger
 import single_instance
 import proxy_detector
+import rate_limiter
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
@@ -165,19 +166,20 @@ class PolymarketDataLayer:
             print("[网络通道] 未找到可用代理，改用直连。")
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """带通道故障回退的请求。
+        """带限流退避与通道故障回退的请求。
 
-        优先走已探测通道；若通道本身出问题（连接被拒/隧道失败），改用直连重试一次。
-        任何其它异常直接抛出，交由调用方按 fail-closed 处理。
+        * 429 —— 遵守 Retry-After 退避重试（限流是突发性的，退避后通常立即恢复）；
+        * 代理/连接异常 —— 改用直连重试一次；
+        * 其它异常直接抛出，交由调用方按 fail-closed 处理。
         """
         try:
-            return self.session.request(method, url, **kwargs)
+            return rate_limiter.request_with_retry(self.session, method, url, **kwargs)
         except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
             if self._proxy_failed:
                 raise
             self._proxy_failed = True
             print("[网络回退] 代理通道异常，切换为直连重试一次。")
-            return self._direct_session.request(method, url, **kwargs)
+            return rate_limiter.request_with_retry(self._direct_session, method, url, **kwargs)
 
     def fetch_active_markets(self, limit: int = 30, offset: int = 0) -> List[Dict[str, Any]]:
         """拉取活跃市场列表。
@@ -1487,6 +1489,25 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
     else:
         coverage_block = ""
 
+    # 限流与退避状态：让"为什么本轮失败"在面板上一目了然
+    try:
+        limiter_state = rate_limiter.rate_limit_snapshot()
+        rate_rows = "".join(
+            f"<tr><td>{host}</td><td>{info.get('min_interval')}s</td>"
+            f"<td>{info.get('seconds_ago')}s 前</td></tr>"
+            for host, info in limiter_state.items()
+        )
+        rate_block = (
+            "<div style='background:rgba(56,138,221,.10);border:1px solid rgba(56,138,221,.35);"
+            "border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#cbd5e1;'>"
+            "<strong style='color:#93c5fd;'>限流保护：</strong>"
+            "已启用 Retry-After 退避 + 指数退避 + 巡检抖动"
+            + (f"<table style='margin-top:8px;font-size:12px;'>{rate_rows}</table>" if rate_rows else "")
+            + "</div>"
+        )
+    except Exception:
+        rate_block = ""
+
     def parse_event_time(value):
         try:
             parsed = datetime.fromisoformat(str(value).replace(" UTC", ""))
@@ -1847,6 +1868,7 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
         <div class="status-row"><strong>单实例锁</strong><span title="{lock_text}">{lock_text}</span></div>
         <div class="status-row"><strong>在途名义</strong><span>买 ${pending_summary.get('open_buy_notional_usdc',0):.2f} · 卖 ${pending_summary.get('open_sell_notional_usdc',0):.2f}</span></div>
         <div class="status-row"><strong>网络通道</strong><span title="{proxy_text} · {proxy_exit_text}">{proxy_text} · {proxy_exit_text}</span></div>
+        <div class="status-row"><strong>限流保护</strong><span>Retry-After 退避 · 指数退避 · 巡检抖动</span></div>
       </div>
       <div class="scroll-region" data-scroll-key="orders" tabindex="0" role="region" aria-label="在途挂单账本，可滚动">
         <table class="orders-table">
@@ -1955,7 +1977,12 @@ if __name__ == "__main__":
                     refresh_dashboard_from_disk()
                 except Exception as dashboard_error:
                     print(f"[告警页面刷新失败] {dashboard_error}")
-            time.sleep(args.interval)
+
+            # 巡检间隔加随机抖动：固定节奏的请求更容易与限流窗口对齐，
+            # 实测 Data API 在突发高频下会返回 429 + Retry-After: 1。
+            delay = rate_limiter.jittered_sleep(args.interval)
+            print(f"[等待] 下一轮在 {delay:.0f}s 后开始（含随机抖动，打散请求节奏）")
+            time.sleep(delay)
     else:
         st = run_quant_cycle()
         if st:

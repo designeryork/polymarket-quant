@@ -38,7 +38,7 @@ CATEGORIES = {
     },
     "RATE_LIMITED": {
         "title": "接口限流（HTTP 429）",
-        "handling": "请求被限流。降低巡检频率并退避重试，遵守 Retry-After；不要固定间隔硬撞接口。",
+        "handling": "请求被限流。这是突发性的短窗口限流（响应头带 Retry-After，通常 1 秒），退避后立即恢复，不影响资金安全。系统已内置指数退避与巡检抖动；若持续出现，说明巡检间隔过短或单轮请求量过大，应调大 SCAN_INTERVAL / 降低 SCAN_LIMIT。本轮未修改账本也未提交订单。",
     },
     "NETWORK_TIMEOUT": {
         "title": "连接超时",

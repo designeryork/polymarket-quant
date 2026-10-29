@@ -488,9 +488,68 @@ def test_scan_coverage() -> None:
     check("记录扫描覆盖统计", "scan_coverage" in source)
 
 
-# ---------------------------------------------------------------- 10. 仓库卫生
+# ---------------------------------------------------------------- 10. 限流保护
+def test_rate_limiter() -> None:
+    section("10. 限流保护（429 退避与巡检抖动）")
+    import rate_limiter
+    import inspect
+
+    src = inspect.getsource(rate_limiter.request_with_retry)
+    check("识别 429 状态码", "status_code == 429" in src)
+    check("读取 Retry-After 响应头", "_retry_after_seconds(response)" in src)
+    check("5xx 走指数退避", "status_code >= 500" in src and "2 ** attempt" in src)
+    check("退避含随机抖动", "random.random()" in src)
+    check("按 host 节流", "_sleep_until_allowed" in src)
+
+    check(
+        "Retry-After 解析正确",
+        rate_limiter._retry_after_seconds(None, default=2.0) == 2.0,
+        "缺失时用默认值",
+    )
+
+    class FakeResp:
+        def __init__(self, code, headers=None):
+            self.status_code = code
+            self.headers = headers or {}
+
+    check(
+        "Retry-After: 1 被正确解析",
+        rate_limiter._retry_after_seconds(FakeResp(429, {"Retry-After": "1"})) == 1.0,
+    )
+    check(
+        "异常 Retry-After 被夹到安全区间",
+        0.2 <= rate_limiter._retry_after_seconds(FakeResp(429, {"Retry-After": "99999"})) <= 60.0,
+    )
+
+    # 抖动：固定间隔会形成规律流量特征
+    delays = [rate_limiter.jittered_sleep(180) for _ in range(12)]
+    check("巡检间隔带抖动", len(set(delays)) > 1, f"{len(set(delays))} 个不同取值")
+    check(
+        "抖动在 ±25% 范围内",
+        all(135 <= d <= 225 for d in delays),
+        f"范围 {min(delays):.0f}~{max(delays):.0f}s",
+    )
+
+    # 对账器与引擎都必须接入
+    rec_src = (BASE / "portfolio_reconciliation.py").read_text(encoding="utf-8")
+    eng_src = (BASE / "quant_engine.py").read_text(encoding="utf-8")
+    check("对账器接入退避重试", "rate_limiter.request_with_retry" in rec_src)
+    check("对账器显式识别 429", "RateLimitError" in rec_src and "429" in rec_src)
+    check("引擎接入退避重试", "rate_limiter.request_with_retry" in eng_src)
+    check("巡检循环使用抖动间隔", "rate_limiter.jittered_sleep" in eng_src)
+
+    check(
+        "各接口设有最小请求间隔",
+        rate_limiter.MIN_INTERVAL.get("data-api.polymarket.com", 0) > 0
+        and rate_limiter.MIN_INTERVAL.get("clob.polymarket.com", 0) > 0,
+        f"Data API {rate_limiter.MIN_INTERVAL.get('data-api.polymarket.com')}s / "
+        f"CLOB {rate_limiter.MIN_INTERVAL.get('clob.polymarket.com')}s",
+    )
+
+
+# ---------------------------------------------------------------- 11. 仓库卫生
 def test_repo_hygiene() -> None:
-    section("10. 仓库与凭证卫生")
+    section("11. 仓库与凭证卫生")
     gitignore = (BASE / ".gitignore").read_text(encoding="utf-8")
     for pattern in (".env", "state/", "logs/", "003_MataMask 钱包/", "build_launcher/", "__pycache__/"):
         check(f".gitignore 覆盖 {pattern}", pattern in gitignore)
@@ -535,6 +594,7 @@ def main() -> int:
     test_ledger_separation()
     test_proxy_detector()
     test_scan_coverage()
+    test_rate_limiter()
     test_repo_hygiene()
 
     print(f"\n{'=' * 70}")

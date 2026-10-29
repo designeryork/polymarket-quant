@@ -12,6 +12,16 @@ import requests
 from dotenv import load_dotenv
 from web3 import Web3
 
+import rate_limiter
+
+
+class RateLimitError(RuntimeError):
+    """Data API 返回 429 且重试已耗尽。
+
+    单独成类，便于上层区分"限流"（稍后重试即可）与"真实故障"（需要人工介入）。
+    """
+
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 PORTFOLIO_FILE = BASE_DIR / "state" / "portfolio.json"
@@ -72,21 +82,21 @@ def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> Li
     direct = build_direct_session()
     proxy_failed = False
     for offset in range(0, 10000, limit):
+        params = {"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0}
+        url = f"{DATA_API}/{endpoint}"
         try:
-            response = session.get(
-                f"{DATA_API}/{endpoint}",
-                params={"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0},
-                timeout=25,
-            )
-        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
+            response = rate_limiter.request_with_retry(session, "GET", url, params=params, timeout=25)
+        except requests.exceptions.ProxyError:
             if direct is None or proxy_failed:
                 raise
             proxy_failed = True
             print("[网络回退] 代理通道异常，切换为直连重试。")
-            response = direct.get(
-                f"{DATA_API}/{endpoint}",
-                params={"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0},
-                timeout=25,
+            response = rate_limiter.request_with_retry(direct, "GET", url, params=params, timeout=25)
+        if response.status_code == 429:
+            # 重试已耗尽：明确记录限流事实，而不是笼统的"请求失败"
+            raise RateLimitError(
+                f"Data API 限流 (HTTP 429) on {endpoint}: "
+                f"Retry-After={response.headers.get('Retry-After') or 'N/A'}"
             )
         response.raise_for_status()
         batch = response.json()
