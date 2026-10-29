@@ -1,0 +1,50 @@
+name: Polymarket 10U Autonomous Quant Loop
+
+on:
+  schedule:
+    # 每 10 分钟在云端自动巡检一次 (0 成本)
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: polymarket-quant-single-runner
+  cancel-in-progress: false
+
+jobs:
+  quant-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Private Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install py-clob-client eth-account web3 python-dotenv requests numpy
+
+      - name: Run Single Quant Cycle (Fail-Closed)
+        env:
+          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS }}
+          DEPOSIT_WALLET: ${{ secrets.DEPOSIT_WALLET }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          CLOB_API_KEY: ${{ secrets.CLOB_API_KEY }}
+          CLOB_SECRET: ${{ secrets.CLOB_SECRET }}
+          CLOB_PASSPHRASE: ${{ secrets.CLOB_PASSPHRASE }}
+          PAPER: ${{ secrets.PAPER || 'false' }}
+          ALLOW_LIVE: ${{ secrets.ALLOW_LIVE || 'true' }}
+        run: |
+          python quant_engine.py
+
+      - name: Persist Portfolio State & Dashboard
+        run: |
+          git config user.name "polymarket-quant-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state/portfolio.json dashboard.html logs/
+          git diff --staged --quiet || git commit -m "chore: update quant state [skip ci]"
+          git push

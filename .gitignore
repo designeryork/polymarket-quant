@@ -1,0 +1,39 @@
+# ===== 密钥与凭证（绝不入库）=====
+.env
+.env.*
+*.pem
+*.key
+!*.pubkey
+
+# ===== 本地运行状态（实盘账本/挂单账本/锁文件）=====
+state/
+data/
+
+# ===== 日志（含全部交易信号、市场标题与异常事件）=====
+logs/
+*.log
+
+# ===== 一次性 burner 钱包目录（含明文私钥与助记词）=====
+003_MataMask 钱包/
+*钱包*/
+*wallet*.json
+metamask-password.txt
+
+# ===== 构建产物与打包二进制 =====
+build_launcher/
+dist/
+*.exe
+*.spec
+
+# ===== Python 缓存 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 编辑器与系统 =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
