@@ -36,6 +36,7 @@ LOGS_DIR.mkdir(exist_ok=True)
 
 PORTFOLIO_FILE = STATE_DIR / "portfolio.json"
 PAPER_PORTFOLIO_FILE = STATE_DIR / "portfolio_paper.json"
+SCAN_ROTATION_FILE = STATE_DIR / "scan_rotation.json"
 SIGNALS_LOG_FILE = LOGS_DIR / "signals_and_skips.jsonl"
 DASHBOARD_HTML_FILE = BASE_DIR / "dashboard.html"
 STOP_FILE = BASE_DIR / "STOP"
@@ -178,7 +179,18 @@ class PolymarketDataLayer:
             print("[网络回退] 代理通道异常，切换为直连重试一次。")
             return self._direct_session.request(method, url, **kwargs)
 
-    def fetch_active_markets(self, limit: int = 30) -> List[Dict[str, Any]]:
+    def fetch_active_markets(self, limit: int = 30, offset: int = 0) -> List[Dict[str, Any]]:
+        """拉取活跃市场列表。
+
+        `offset` 用于轮转覆盖：Gamma 单次最多返回 100 个市场，若每轮都只取
+        成交量前 N 个，相邻轮次的候选集合高度重叠（实测 Jaccard 重合度 0.669），
+        大量市场永远得不到评估机会。通过 offset 轮转，让整个池子被逐步覆盖。
+
+        额外过滤已结束市场：Gamma 的 `active=true` 并不严格排除已结算盘口，
+        实测返回结果中包含已过期 148 天的市场（endDate 早已过去）。
+        这些市场白白占用扫描配额（历史数据显示占扫描量的 24.6%，
+        其中 83.9% 实际已过期），这里在拉取阶段就剔除。
+        """
         params = {
             "active": "true",
             "closed": "false",
@@ -186,11 +198,26 @@ class PolymarketDataLayer:
             "order": "volume24hr",
             "ascending": "false",
         }
+        if offset:
+            params["offset"] = offset
         try:
             resp = self._request("GET", GAMMA_MARKETS_URL, params=params, timeout=12)
             resp.raise_for_status()
             data = resp.json()
-            return data if isinstance(data, list) else []
+            if not isinstance(data, list):
+                return []
+            now = datetime.now(timezone.utc)
+            alive = []
+            expired = 0
+            for market in data:
+                hours_left = parse_hours_to_expiry(market)
+                if hours_left <= 0:
+                    expired += 1
+                    continue
+                alive.append(market)
+            if expired:
+                print(f"[扫描窗口] 剔除已结束市场 {expired} 个（Gamma active 过滤不彻底）")
+            return alive
         except Exception as e:
             print(f"[网络波动跳过] Gamma API 请求异常 (Fail-closed): {e}")
             return []
@@ -476,6 +503,36 @@ def compute_total_exposure(state: Dict[str, Any]) -> float:
     return round(position_exposure + order_ledger.open_buy_notional(), 6)
 
 
+def load_scan_rotation() -> Dict[str, Any]:
+    """读取扫描轮转状态。
+
+    独立文件存储，不放进 portfolio.json —— 因为 LIVE 模式下 portfolio.json
+    会被对账器整份重建，放在里面会被覆盖。
+    """
+    try:
+        return json.loads(SCAN_ROTATION_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_scan_rotation(next_offset: int) -> None:
+    try:
+        SCAN_ROTATION_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SCAN_ROTATION_FILE.write_text(
+            json.dumps(
+                {
+                    "next_offset": int(next_offset),
+                    "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def cleanup_dangling_sell_orders(state: Dict[str, Any]) -> int:
     """清理已无对应持仓的挂卖单（止盈单/平仓单）。
 
@@ -757,7 +814,7 @@ def evaluate_existing_positions(
     return events
 
 
-def run_quant_cycle(max_markets: int = 25) -> Dict[str, Any]:
+def run_quant_cycle() -> Dict[str, Any]:
     """
     执行一轮完整的 Polymarket 扫描 -> 特征计算 -> 假说检验 -> 风险门过滤 -> 模拟/实盘撮合
     """
@@ -810,7 +867,41 @@ def run_quant_cycle(max_markets: int = 25) -> Dict[str, Any]:
     circuit_breaker = day_pnl <= -risk.daily_loss_limit
 
     # 3. 抓取活跃市场
-    markets = data_layer.fetch_active_markets(limit=max_markets)
+    # 扫描窗口配置：
+    #   SCAN_LIMIT           —— 每轮从 Gamma 拉取的候选数量（上限 100）
+    #   SCAN_OFFSET_ROTATION —— 轮转步长，让相邻轮次覆盖不同区间，
+    #                           避免"每轮都看同一批头部市场"导致的机会遗漏
+    scan_limit = max(1, min(int(os.getenv("SCAN_LIMIT", "60")), 100))
+    rotation = max(0, int(os.getenv("SCAN_OFFSET_ROTATION", "20")))
+    offset = 0
+    if rotation:
+        offset = int(load_scan_rotation().get("next_offset") or 0)
+        if offset >= scan_limit:
+            offset = 0
+    markets = data_layer.fetch_active_markets(limit=scan_limit, offset=offset)
+    if rotation and markets:
+        save_scan_rotation((offset + rotation) % max(1, scan_limit))
+    print(f"[扫描窗口] 拉取 {len(markets)} 个市场 (limit={scan_limit}, offset={offset})")
+
+    # 扫描覆盖统计：记录本轮评估过的不同市场，用于量化"是否真的在覆盖整个池子"
+    state.setdefault("scan_coverage", {})
+    coverage = state["scan_coverage"]
+    seen = coverage.setdefault("markets_seen", {})
+    for m in markets:
+        q = m.get("question", "")[:120]
+        if q:
+            seen[q] = int(seen.get(q, 0)) + 1
+    coverage["distinct_markets_seen"] = len(seen)
+    coverage["total_evaluations"] = int(coverage.get("total_evaluations", 0)) + len(markets)
+    coverage["rounds"] = int(coverage.get("rounds", 0)) + 1
+    coverage["last_limit"] = scan_limit
+    coverage["last_offset"] = offset
+    coverage["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+    if coverage["rounds"] % 10 == 0:
+        print(
+            f"[扫描覆盖] 累计 {coverage['rounds']} 轮 | 评估 {coverage['total_evaluations']} 次 | "
+            f"覆盖 {coverage['distinct_markets_seen']} 个不同市场"
+        )
     # 在途挂单占用的 token / event 同样要视为"已持有"，防止对同一市场重复下单
     pending_token_ids = order_ledger.blocking_token_ids()
     pending_event_ids = order_ledger.blocking_event_ids()
@@ -1381,6 +1472,21 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
         else ("锁文件存在但持锁进程已退出（陈旧锁）" if lock_info.get("held") else "未持有锁（当前为一次性运行或后台未启动）")
     )
 
+    # 扫描覆盖统计：量化"评估次数"与"覆盖的不同市场数"的差距
+    coverage = state.get("scan_coverage") or {}
+    if coverage.get("rounds"):
+        distinct = int(coverage.get("distinct_markets_seen", 0))
+        evaluations = int(coverage.get("total_evaluations", 0))
+        avg = evaluations / max(1, coverage.get("rounds", 1))
+        coverage_block = (
+            f'<div class="kpi-sub" style="margin-top:6px;">'
+            f'覆盖 {distinct} 个不同市场 · 平均每轮 {avg:.0f} 个 · '
+            f'窗口 limit={coverage.get("last_limit")} offset={coverage.get("last_offset")}'
+            f"</div>"
+        )
+    else:
+        coverage_block = ""
+
     def parse_event_time(value):
         try:
             parsed = datetime.fromisoformat(str(value).replace(" UTC", ""))
@@ -1705,6 +1811,7 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
       <div class="kpi-label"><span>扫描与过滤</span><span class="kpi-english">Activity</span></div>
       <div class="kpi-val">{state['stats']['signals_triggered']} <small>笔成交</small></div>
       <div class="kpi-sub">{state['stats']['markets_evaluated']:,} 次评估 · {state['stats']['skipped_count']:,} 次跳过</div>
+      {coverage_block}
     </div>
   </section>
 

@@ -456,9 +456,41 @@ def test_proxy_detector() -> None:
     )
 
 
-# ---------------------------------------------------------------- 9. 仓库卫生
+# ---------------------------------------------------------------- 9. 扫描覆盖
+def test_scan_coverage() -> None:
+    section("9. 扫描覆盖能力")
+    import quant_engine
+
+    # 扫描窗口必须支持 offset 轮转
+    source = (BASE / "quant_engine.py").read_text(encoding="utf-8")
+    check("fetch_active_markets 支持 offset 参数", "def fetch_active_markets(self, limit" in source and "offset" in source)
+
+    # 扫描窗口配置项存在且有合理默认值
+    check("SCAN_LIMIT 配置存在", "SCAN_LIMIT" in source, "默认 60（Gamma 单次上限 100）")
+    check("SCAN_OFFSET_ROTATION 配置存在", "SCAN_OFFSET_ROTATION" in source, "默认 20，轮转步长")
+
+    # 轮转状态可持久化（独立文件，不放进会被对账器重建的 portfolio.json）
+    check(
+        "轮转状态使用独立文件",
+        quant_engine.SCAN_ROTATION_FILE.name == "scan_rotation.json",
+        str(quant_engine.SCAN_ROTATION_FILE.name),
+    )
+    check("轮转状态文件在 state/ 目录", quant_engine.SCAN_ROTATION_FILE.parent.name == "state")
+
+    # 已结束市场过滤
+    check(
+        "拉取阶段剔除已结束市场",
+        "剔除已结束市场" in source,
+        "Gamma active=true 不排除已结算盘口（实测过期达 148 天）",
+    )
+
+    # 覆盖统计
+    check("记录扫描覆盖统计", "scan_coverage" in source)
+
+
+# ---------------------------------------------------------------- 10. 仓库卫生
 def test_repo_hygiene() -> None:
-    section("9. 仓库与凭证卫生")
+    section("10. 仓库与凭证卫生")
     gitignore = (BASE / ".gitignore").read_text(encoding="utf-8")
     for pattern in (".env", "state/", "logs/", "003_MataMask 钱包/", "build_launcher/", "__pycache__/"):
         check(f".gitignore 覆盖 {pattern}", pattern in gitignore)
@@ -502,6 +534,7 @@ def main() -> int:
     test_error_taxonomy()
     test_ledger_separation()
     test_proxy_detector()
+    test_scan_coverage()
     test_repo_hygiene()
 
     print(f"\n{'=' * 70}")
