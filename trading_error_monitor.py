@@ -56,6 +56,10 @@ CATEGORIES = {
         "title": "域名解析失败",
         "handling": "无法解析目标域名，属于本机 DNS 或网络配置问题。未产生任何交易动作。",
     },
+    "MARKET_NOT_TRADABLE": {
+        "title": "市场当前不可交易（交易所侧禁用）",
+        "handling": "CLOB 返回 503 trading is disabled，表示该市场被交易所侧临时禁用（UMA 争议、流动性冻结、结算过渡），与账号或代码无关。订单未成交，账本不变。系统已自动进入市场级熔断冷却，冷却期内不再重试该市场，避免每轮硬撞刷屏。持仓保留，待市场恢复交易后由止盈单或退出逻辑处理。",
+    },
     "TRADING_ERROR": {
         "title": "交易或执行异常",
         "handling": "本次操作未确认成功；保持账本不变并检查原始错误，恢复前先只读对账。",
@@ -120,6 +124,8 @@ def classify_error(error: Any) -> str:
         return "DNS_ERROR"
 
     # --- 交易与账户类 ---
+    if "trading is disabled" in text or "no orderbook exists" in text:
+        return "MARKET_NOT_TRADABLE"
     if "trading restricted in your region" in text or ("403" in text and "region" in text):
         return "REGION_RESTRICTED"
     if "poly_1271" in text or "invalid signature" in text or "signature too short" in text:
@@ -158,6 +164,7 @@ def record_trading_error(
     source: str = "runtime",
     source_record: str = "",
     context: str = "",
+    severity: Optional[str] = None,
 ) -> Dict[str, Any]:
     timestamp = occurred_at or utc_now()
     detail = sanitize_error(error)
@@ -170,7 +177,7 @@ def record_trading_error(
         "stage_label": STAGE_LABELS.get(stage, stage),
         "category": category,
         "category_label": CATEGORIES[category]["title"],
-        "severity": "warning" if category in NETWORK_CATEGORIES else "critical",
+        "severity": severity or ("warning" if category in NETWORK_CATEGORIES else "critical"),
         "question": question,
         "side": side,
         "detail": detail,

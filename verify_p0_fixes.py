@@ -639,9 +639,89 @@ def test_order_amount_minimum() -> None:
     check("引擎含 $1 门槛预检", "AMOUNT_BELOW_MIN" in eng_src)
 
 
-# ---------------------------------------------------------------- 12. 仓库卫生
+# ---------------------------------------------------------------- 12. 市场熔断
+def test_market_circuit() -> None:
+    section("12. 市场不可交易熔断（503 trading is disabled）")
+    import market_circuit
+    from trading_error_monitor import classify_error
+
+    # 识别
+    check(
+        "识别 trading is disabled",
+        market_circuit.is_not_tradable_error(
+            "PolyApiException[status_code=503, error_message={'error': 'trading is disabled'}]"
+        ),
+    )
+    check(
+        "识别 No orderbook exists",
+        market_circuit.is_not_tradable_error(
+            '{"error":"No orderbook exists for the requested token id"}'
+        ),
+    )
+    check(
+        "不误判普通交易错误",
+        not market_circuit.is_not_tradable_error(
+            "invalid amount for a marketable BUY order ($0.999), min size: $1"
+        ),
+    )
+    check(
+        "分类器输出 MARKET_NOT_TRADABLE",
+        classify_error(
+            "PolyApiException[status_code=503, error_message={'error': 'trading is disabled'}]"
+        ) == "MARKET_NOT_TRADABLE",
+    )
+
+    # 熔断行为
+    with tempfile.TemporaryDirectory() as tmp:
+        breaker = market_circuit.MarketCircuitBreaker(Path(tmp) / "circuit.json")
+        token = "TOKEN_TEST"
+        check("首次前不跳过", breaker.should_skip(token) is False)
+
+        breaker.record_failure(token, "503")
+        check(
+            "达到阈值前仍允许重试",
+            breaker.should_skip(token) is False,
+            f"阈值={market_circuit.FAILURE_THRESHOLD}",
+        )
+
+        breaker.record_failure(token, "503")
+        check("达到阈值后进入冷却", breaker.should_skip(token) is True)
+        check(
+            "跳过原因可读",
+            "熔断" in breaker.skip_reason(token),
+            breaker.skip_reason(token)[:60],
+        )
+
+        skipped = sum(1 for _ in range(14) if breaker.should_skip(token))
+        check(
+            "冷却期内不再重复请求（消除重试风暴）",
+            skipped == 14,
+            f"后续 14 轮被跳过 {skipped}/14（修复前 0/14，全部硬撞）",
+        )
+
+        breaker.record_success(token)
+        check("一次成功即复位", breaker.should_skip(token) is False)
+
+        # 持久化
+        path = Path(tmp) / "persist.json"
+        b1 = market_circuit.MarketCircuitBreaker(path)
+        b1.record_failure("T1", "503")
+        b1.record_failure("T1", "503")
+        b2 = market_circuit.MarketCircuitBreaker(path)
+        check("熔断状态跨重启保留", b2.should_skip("T1") is True)
+
+    eng_src = (BASE / "quant_engine.py").read_text(encoding="utf-8")
+    check("引擎接入熔断器", "market_circuit.get_breaker().should_skip" in eng_src)
+    check(
+        "不可交易错误降级为 warning",
+        'severity="warning"' in eng_src,
+        "市场状态问题不该刷成 critical 淹没真实故障",
+    )
+
+
+# ---------------------------------------------------------------- 13. 仓库卫生
 def test_repo_hygiene() -> None:
-    section("12. 仓库与凭证卫生")
+    section("13. 仓库与凭证卫生")
     gitignore = (BASE / ".gitignore").read_text(encoding="utf-8")
     for pattern in (".env", "state/", "logs/", "003_MataMask 钱包/", "build_launcher/", "__pycache__/"):
         check(f".gitignore 覆盖 {pattern}", pattern in gitignore)
@@ -688,6 +768,7 @@ def main() -> int:
     test_scan_coverage()
     test_rate_limiter()
     test_order_amount_minimum()
+    test_market_circuit()
     test_repo_hygiene()
 
     print(f"\n{'=' * 70}")

@@ -26,6 +26,7 @@ import order_ledger
 import single_instance
 import proxy_detector
 import rate_limiter
+import market_circuit
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
@@ -694,6 +695,17 @@ def evaluate_existing_positions(
         if not paper_mode:
             # ===== LIVE 分支：所有下单动作都必须先查在途挂单账本 =====
             if allow_live and not STOP_FILE.exists():
+                # 市场级熔断：该市场若被交易所禁用（如 503 trading is disabled），
+                # 冷却期内直接跳过，不再每轮硬撞（实测曾连续 16 轮重复失败）。
+                if market_circuit.get_breaker().should_skip(token_id):
+                    append_audit_log({
+                        "action": "LIVE_MARKET_CIRCUIT_OPEN",
+                        "token_id": token_id,
+                        "reason": market_circuit.get_breaker().skip_reason(token_id),
+                    })
+                    unrealized_sum += pnl_usdc
+                    remaining_positions.append(pos)
+                    continue
                 try:
                     ex = get_live_executor()
                     # 该 token 是否已有在途卖单（防止同一仓位挂出多张卖单导致超额卖出）
@@ -785,9 +797,21 @@ def evaluate_existing_positions(
                                     )
                 except Exception as le:
                     append_audit_log({"action": "LIVE_EXIT_FAILED", "error": str(le)[:300], "reason": exit_reason})
-                    record_trading_error(
-                        "CLOSE", le, pos.get("market_question", ""), pos.get("outcome", ""), context=exit_reason or "LIVE_TP"
-                    )
+                    # 若是"市场不可交易"，记入熔断器并降低严重度：
+                    # 这是交易所侧的市场状态，不是账号或代码故障，
+                    # 不该在告警面板上刷成 critical 淹没真实问题。
+                    if market_circuit.is_not_tradable_error(le):
+                        market_circuit.get_breaker().record_failure(token_id, str(le)[:200])
+                        record_trading_error(
+                            "CLOSE", le, pos.get("market_question", ""), pos.get("outcome", ""),
+                            context=exit_reason or "LIVE_TP",
+                            severity="warning",
+                        )
+                    else:
+                        record_trading_error(
+                            "CLOSE", le, pos.get("market_question", ""), pos.get("outcome", ""),
+                            context=exit_reason or "LIVE_TP",
+                        )
             unrealized_sum += pnl_usdc
             remaining_positions.append(pos)
             continue
