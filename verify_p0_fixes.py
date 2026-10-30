@@ -719,9 +719,75 @@ def test_market_circuit() -> None:
     )
 
 
-# ---------------------------------------------------------------- 13. 仓库卫生
+# ---------------------------------------------------------------- 13. 轮次预算与降级
+def test_round_budget_and_degradation() -> None:
+    section("13. 轮次时间预算与网络降级")
+    import time
+
+    import rate_limiter
+
+    # --- 预算机制 ---
+    rate_limiter.start_round_budget(2)
+    check("预算开启后有剩余时间", (rate_limiter.round_budget_remaining() or 0) > 0)
+    check("刚开启时尚未耗尽", rate_limiter.budget_exhausted() is False)
+
+    time.sleep(2.2)
+    check("超时后预算耗尽", rate_limiter.budget_exhausted() is True)
+
+    # 预算耗尽时必须立即快速失败，而不是继续重试
+    import requests
+
+    session = requests.Session()
+    started = time.time()
+    try:
+        rate_limiter.request_with_retry(
+            session, "GET", "https://data-api.polymarket.com/positions?user=0x0&limit=1", timeout=8
+        )
+        check("预算耗尽时快速失败", False, "未抛出异常")
+    except rate_limiter.RoundBudgetExceeded:
+        check(
+            "预算耗尽时快速失败（不重试）",
+            time.time() - started < 1.0,
+            f"耗时 {time.time() - started:.2f}s",
+        )
+    except Exception as exc:
+        check("预算耗尽时快速失败", False, f"抛出了 {type(exc).__name__}")
+    rate_limiter.clear_round_budget()
+
+    # --- 网络健康度与自适应扫描量 ---
+    original_health = list(rate_limiter._health)
+    try:
+        scenarios = [
+            (1.0, 60, "healthy"),
+            (0.8, 36, "degraded"),
+            (0.4, 15, "poor"),
+        ]
+        for success_rate, expected_limit, expected_status in scenarios:
+            rate_limiter._health[:] = (
+                [True] * int(success_rate * 20) + [False] * int((1 - success_rate) * 20)
+            )[-20:]
+            health = rate_limiter.network_health()
+            limit = rate_limiter.adaptive_scan_limit(60)
+            check(
+                f"网络 {expected_status} 时扫描量收缩到 {expected_limit}",
+                limit == expected_limit and health["status"] == expected_status,
+                f"成功率 {health['success_rate']} -> limit={limit}",
+            )
+    finally:
+        rate_limiter._health[:] = original_health
+
+    # --- 引擎接入 ---
+    eng_src = (BASE / "quant_engine.py").read_text(encoding="utf-8")
+    check("引擎开启轮次预算", "start_round_budget" in eng_src)
+    check("引擎在 finally 中释放预算", "clear_round_budget" in eng_src)
+    check("扫描循环检查预算", "budget_exhausted()" in eng_src)
+    check("引擎使用自适应扫描量", "adaptive_scan_limit" in eng_src)
+    check("预算耗尽不记为错误", "except rate_limiter.RoundBudgetExceeded" in eng_src)
+
+
+# ---------------------------------------------------------------- 14. 仓库卫生
 def test_repo_hygiene() -> None:
-    section("13. 仓库与凭证卫生")
+    section("14. 仓库与凭证卫生")
     gitignore = (BASE / ".gitignore").read_text(encoding="utf-8")
     for pattern in (".env", "state/", "logs/", "003_MataMask 钱包/", "build_launcher/", "__pycache__/"):
         check(f".gitignore 覆盖 {pattern}", pattern in gitignore)
@@ -769,6 +835,7 @@ def main() -> int:
     test_rate_limiter()
     test_order_amount_minimum()
     test_market_circuit()
+    test_round_budget_and_degradation()
     test_repo_hygiene()
 
     print(f"\n{'=' * 70}")

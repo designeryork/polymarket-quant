@@ -853,6 +853,18 @@ def run_quant_cycle() -> Dict[str, Any]:
         return {}
 
     risk = RiskEnvelope()
+    # 本轮请求时间预算：防止单个慢请求吃掉整轮时间，
+    # 导致巡检节奏被打乱、后续请求堆积、更易触发上游超时（正反馈）。
+    budget_seconds = max(60, int(os.getenv("ROUND_BUDGET_SECONDS", "240")))
+    rate_limiter.start_round_budget(budget_seconds)
+    round_started = time.time()
+    try:
+        return _run_quant_cycle_inner(risk, budget_seconds, round_started)
+    finally:
+        rate_limiter.clear_round_budget()
+
+
+def _run_quant_cycle_inner(risk: RiskEnvelope, budget_seconds: int, round_started: float) -> Dict[str, Any]:
     if not risk.paper_mode:
         if not risk.allow_live:
             print("[对账保护] PAPER=false 但 ALLOW_LIVE=false，拒绝使用本地账本继续实盘扫描。")
@@ -864,6 +876,14 @@ def run_quant_cycle() -> Dict[str, Any]:
         try:
             from portfolio_reconciliation import reconcile
             state = reconcile(apply=True, backup=False)
+        except rate_limiter.RoundBudgetExceeded as budget_error:
+            # 预算耗尽不是故障，是"本轮该收手"——不记为错误，避免刷屏
+            print(f"[预算耗尽] 对账未完成，本轮提前结束: {budget_error}")
+            try:
+                refresh_dashboard_from_disk()
+            except Exception:
+                pass
+            return {}
         except Exception as reconciliation_error:
             record_trading_error("RECONCILIATION", reconciliation_error, context="本轮已跳过，不修改账本或提交订单")
             print(f"[对账失败] 本轮已跳过，不修改账本或提交订单: {reconciliation_error}")
@@ -902,6 +922,11 @@ def run_quant_cycle() -> Dict[str, Any]:
     #   SCAN_OFFSET_ROTATION —— 轮转步长，让相邻轮次覆盖不同区间，
     #                           避免"每轮都看同一批头部市场"导致的机会遗漏
     scan_limit = max(1, min(int(os.getenv("SCAN_LIMIT", "60")), 100))
+    # 网络不稳时自动收缩扫描量，给链路喘息空间（正反馈的负反馈环）
+    health = rate_limiter.network_health()
+    adaptive_limit = rate_limiter.adaptive_scan_limit(scan_limit)
+    if adaptive_limit < scan_limit:
+        scan_limit = adaptive_limit
     rotation = max(0, int(os.getenv("SCAN_OFFSET_ROTATION", "20")))
     offset = 0
     if rotation:
@@ -911,7 +936,10 @@ def run_quant_cycle() -> Dict[str, Any]:
     markets = data_layer.fetch_active_markets(limit=scan_limit, offset=offset)
     if rotation and markets:
         save_scan_rotation((offset + rotation) % max(1, scan_limit))
-    print(f"[扫描窗口] 拉取 {len(markets)} 个市场 (limit={scan_limit}, offset={offset})")
+    print(
+        f"[扫描窗口] 拉取 {len(markets)} 个市场 "
+        f"(limit={scan_limit}, offset={offset}, 网络={health['status']} 成功率={health['success_rate']})"
+    )
 
     # 扫描覆盖统计：记录本轮评估过的不同市场，用于量化"是否真的在覆盖整个池子"
     state.setdefault("scan_coverage", {})
@@ -926,6 +954,8 @@ def run_quant_cycle() -> Dict[str, Any]:
     coverage["rounds"] = int(coverage.get("rounds", 0)) + 1
     coverage["last_limit"] = scan_limit
     coverage["last_offset"] = offset
+    coverage["network_health"] = health["status"]
+    coverage["network_success_rate"] = health["success_rate"]
     coverage["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
     if coverage["rounds"] % 10 == 0:
         print(
@@ -956,7 +986,18 @@ def run_quant_cycle() -> Dict[str, Any]:
         cycle_decisions.append(item)
         append_audit_log(item)
 
+    evaluated_before = state["stats"]["markets_evaluated"]
     for m in markets:
+        # 预算耗尽 -> 立即停止本轮剩余扫描，保留下轮重新开始的机会。
+        # 这比"继续硬撞"好得多：硬撞只会让链路更紧张，形成正反馈。
+        if rate_limiter.budget_exhausted():
+            skipped_by_budget = len(markets) - (state["stats"]["markets_evaluated"] - evaluated_before)
+            print(
+                f"[预算耗尽] 本轮已用 {time.time() - round_started:.0f}s / {budget_seconds}s，"
+                f"剩余 {skipped_by_budget} 个市场留到下轮"
+            )
+            break
+
         question = m.get("question", "Unknown Market")
         state["stats"]["markets_evaluated"] += 1
 
@@ -1552,6 +1593,11 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
     # 限流与退避状态：让"为什么本轮失败"在面板上一目了然
     try:
         limiter_state = rate_limiter.rate_limit_snapshot()
+        health_state = rate_limiter.network_health()
+        network_health_text = (
+            f"{health_state['status']} · 成功率 {health_state['success_rate']:.0%} "
+            f"(最近 {health_state['sample']} 次请求)"
+        )
         rate_rows = "".join(
             f"<tr><td>{host}</td><td>{info.get('min_interval')}s</td>"
             f"<td>{info.get('seconds_ago')}s 前</td></tr>"
@@ -1561,12 +1607,13 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
             "<div style='background:rgba(56,138,221,.10);border:1px solid rgba(56,138,221,.35);"
             "border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#cbd5e1;'>"
             "<strong style='color:#93c5fd;'>限流保护：</strong>"
-            "已启用 Retry-After 退避 + 指数退避 + 巡检抖动"
+            "已启用 Retry-After 退避 + 指数退避 + 巡检抖动 + 单轮时间预算"
             + (f"<table style='margin-top:8px;font-size:12px;'>{rate_rows}</table>" if rate_rows else "")
             + "</div>"
         )
     except Exception:
         rate_block = ""
+        network_health_text = "未知"
 
     def parse_event_time(value):
         try:
@@ -1929,6 +1976,7 @@ def generate_dashboard_html(state: Dict[str, Any]) -> None:
         <div class="status-row"><strong>在途名义</strong><span>买 ${pending_summary.get('open_buy_notional_usdc',0):.2f} · 卖 ${pending_summary.get('open_sell_notional_usdc',0):.2f}</span></div>
         <div class="status-row"><strong>网络通道</strong><span title="{proxy_text} · {proxy_exit_text}">{proxy_text} · {proxy_exit_text}</span></div>
         <div class="status-row"><strong>限流保护</strong><span>Retry-After 退避 · 指数退避 · 巡检抖动</span></div>
+        <div class="status-row"><strong>网络健康</strong><span title="最近 20 次请求的成功率；网络不稳时系统会自动收缩每轮扫描量">{network_health_text}</span></div>
       </div>
       <div class="scroll-region" data-scroll-key="orders" tabindex="0" role="region" aria-label="在途挂单账本，可滚动">
         <table class="orders-table">

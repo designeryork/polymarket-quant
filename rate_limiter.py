@@ -39,6 +39,54 @@ MIN_INTERVAL = {
     "gamma-api.polymarket.com": 0.20,
 }
 
+# ==========================================================
+# 轮次时间预算
+# ==========================================================
+# 实测：单轮巡检含 180+ 请求（对账 3 + Gamma 1 + 盘口 120 + 历史 60）。
+# 正常情况下需 43~96s。但一旦某个请求超时：
+#   盘口 timeout=8s x 4 次重试 = 最坏 45.7s
+#   对账 timeout=25s x 4 次重试 = 最坏 113.7s
+# 单个慢请求就能吃掉整轮时间，导致巡检节奏被打乱、
+# 后续请求挤在一起，反而更容易触发上游限流与超时（正反馈）。
+#
+# 因此引入**轮次预算**：预算耗尽后立即停止重试并快速失败，
+# 让本轮剩余部分跳过，保留下轮重新开始的机会。
+_DEADLINE: Optional[float] = None
+_ROUND_BUDGET_SECONDS = 240.0
+
+
+def start_round_budget(budget_seconds: float = _ROUND_BUDGET_SECONDS) -> None:
+    """开启新一轮的请求时间预算。"""
+    global _DEADLINE
+    _DEADLINE = time.time() + budget_seconds
+
+
+def clear_round_budget() -> None:
+    """结束本轮预算（下一轮会重新开启）。"""
+    global _DEADLINE
+    _DEADLINE = None
+
+
+def round_budget_remaining() -> Optional[float]:
+    """返回本轮剩余预算秒数；None 表示未设预算。"""
+    if _DEADLINE is None:
+        return None
+    return max(0.0, _DEADLINE - time.time())
+
+
+def budget_exhausted() -> bool:
+    """预算是否已耗尽。"""
+    remaining = round_budget_remaining()
+    return remaining is not None and remaining <= 0
+
+
+class RoundBudgetExceeded(RuntimeError):
+    """本轮请求时间预算耗尽。
+
+    与普通网络异常区分开：这不是"请求失败"，而是"本轮该收手了"。
+    捕获它时应当跳过剩余工作，而不是重试。
+    """
+
 
 def _host_of(url: str) -> str:
     try:
@@ -82,6 +130,7 @@ def request_with_retry(
     base_backoff: float = 1.5,
     max_backoff: float = 30.0,
     throttle: bool = True,
+    respect_budget: bool = True,
     **kwargs: Any,
 ) -> requests.Response:
     """带限流感知重试的请求。
@@ -89,38 +138,68 @@ def request_with_retry(
     * 429 —— 遵守 `Retry-After` 等待后重试；
     * 5xx —— 指数退避 + 抖动后重试；
     * 网络异常 —— 指数退避 + 抖动后重试；
-    * 4xx（除 429）—— 立即抛出（重试无意义）。
+    * 4xx（除 429）—— 立即抛出（重试无意义）；
+    * **轮次预算耗尽 —— 立即抛 RoundBudgetExceeded，不再重试**
+      （这是"本轮该收手"的信号，不是"再试一次也许能成"）。
     """
     last_error: Optional[Exception] = None
 
     for attempt in range(max_attempts):
+        # 预算检查：本轮时间不够了就别再重试，快速失败让本轮收尾
+        if respect_budget and budget_exhausted():
+            raise RoundBudgetExceeded(
+                f"本轮请求时间预算已耗尽（剩余 {round_budget_remaining() or 0:.0f}s），跳过剩余请求"
+            )
         if throttle:
             _sleep_until_allowed(url)
         try:
             response = session.request(method, url, **kwargs)
         except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as exc:
+            record_request_result(False)
             last_error = exc
             if attempt >= max_attempts - 1:
                 raise
+            # 退避也要看预算：退避到预算耗尽就放弃
             delay = min(base_backoff * (2 ** attempt), max_backoff) * (0.7 + random.random() * 0.6)
+            if respect_budget:
+                remaining = round_budget_remaining()
+                if remaining is not None and delay >= remaining:
+                    raise RoundBudgetExceeded(
+                        f"退避 {delay:.0f}s 将超出本轮剩余预算 {remaining:.0f}s，放弃重试"
+                    ) from exc
             time.sleep(delay)
             continue
 
         if response.status_code == 429:
+            record_request_result(False)
             if attempt >= max_attempts - 1:
                 return response  # 交给调用方按 fail-closed 处理
             delay = _retry_after_seconds(response) * (2 ** attempt)
             delay = min(delay, max_backoff)
+            if respect_budget:
+                remaining = round_budget_remaining()
+                if remaining is not None and delay >= remaining:
+                    raise RoundBudgetExceeded(
+                        f"限流退避 {delay:.0f}s 将超出本轮剩余预算 {remaining:.0f}s，放弃重试"
+                    )
             time.sleep(delay)
             continue
 
         if response.status_code >= 500:
+            record_request_result(False)
             if attempt >= max_attempts - 1:
                 return response
             delay = min(base_backoff * (2 ** attempt), max_backoff) * (0.7 + random.random() * 0.6)
+            if respect_budget:
+                remaining = round_budget_remaining()
+                if remaining is not None and delay >= remaining:
+                    raise RoundBudgetExceeded(
+                        f"5xx 退避 {delay:.0f}s 将超出本轮剩余预算 {remaining:.0f}s，放弃重试"
+                    )
             time.sleep(delay)
             continue
 
+        record_request_result(True)
         return response
 
     if last_error:
@@ -140,6 +219,59 @@ def jittered_sleep(base_seconds: int, jitter_ratio: float = 0.25) -> float:
     spread = base_seconds * jitter_ratio
     delay = base_seconds + random.uniform(-spread, spread)
     return max(5.0, delay)
+
+
+# ==========================================================
+# 网络健康度与自适应扫描量
+# ==========================================================
+# 网络不稳时，固定 60 个市场的扫描量会持续给上游加压，
+# 让本就紧张的链路更容易超时（正反馈）。
+# 这里记录最近的网络失败率，据此自动收缩本轮扫描量。
+_HEALTH_WINDOW = 20          # 保留最近多少次请求的结果
+_success_streak = 0
+_health: list = []           # True=成功 / False=失败
+
+
+def record_request_result(ok: bool) -> None:
+    """记录一次请求结果，用于计算网络健康度。"""
+    global _success_streak
+    _health.append(bool(ok))
+    if len(_health) > _HEALTH_WINDOW:
+        del _health[: len(_health) - _HEALTH_WINDOW]
+    _success_streak = _success_streak + 1 if ok else 0
+
+
+def network_health() -> Dict[str, Any]:
+    """返回网络健康度摘要。"""
+    if not _health:
+        return {"success_rate": 1.0, "sample": 0, "status": "unknown"}
+    rate = sum(_health) / len(_health)
+    if rate >= 0.95:
+        status = "healthy"
+    elif rate >= 0.7:
+        status = "degraded"
+    else:
+        status = "poor"
+    return {"success_rate": round(rate, 3), "sample": len(_health), "status": status}
+
+
+def adaptive_scan_limit(base_limit: int, min_limit: int = 15) -> int:
+    """按网络健康度收缩本轮扫描量。
+
+    * healthy —— 用满 base_limit（默认 60）；
+    * degraded —— 降到 60%；
+    * poor    —— 降到 min_limit（默认 15）。
+
+    目的是让网络不稳时的请求压力自动下降，给链路喘息空间。
+    网络恢复后会自动回到满额。
+    """
+    health = network_health()
+    status = health["status"]
+    if status == "healthy":
+        return base_limit
+    if status == "degraded":
+        return max(min_limit, int(base_limit * 0.6))
+    return min_limit
 
 
 def rate_limit_snapshot() -> Dict[str, Any]:
