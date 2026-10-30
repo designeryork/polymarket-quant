@@ -68,18 +68,9 @@ def build_session() -> requests.Session:
     return session
 
 
-def build_direct_session() -> Optional[requests.Session]:
-    """直连回退会话。"""
-    direct = requests.Session()
-    direct.headers.update({"User-Agent": "PolymarketPortfolioReconciliation/1.0"})
-    direct.trust_env = False
-    return direct
-
-
 def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     limit = 500
-    direct = build_direct_session()
     proxy_failed = False
     for offset in range(0, 10000, limit):
         params = {"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0}

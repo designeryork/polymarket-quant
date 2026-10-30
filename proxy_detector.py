@@ -118,14 +118,18 @@ def candidate_proxies() -> List[Dict[str, str]]:
 
 
 def _probe_url(url: Optional[str], timeout: float = 12.0) -> Tuple[bool, str, float]:
-    """用只读请求验证通道是否真正连通 Polymarket。"""
+    """用只读请求验证通道是否真正连通 Polymarket。
+
+    超时拆分为 (connect, read)：隧道建立本该是毫秒级，卡住时用小值快速失败，
+    避免探测阶段本身就被一次无效的 CONNECT 卡住 12 秒。
+    """
     session = requests.Session()
     session.trust_env = False
     if url:
         session.proxies = {"http": url, "https": url}
     started = time.time()
     try:
-        response = session.get(PROBE_URL, timeout=timeout)
+        response = session.get(PROBE_URL, timeout=(6, timeout))
         elapsed = time.time() - started
         if response.status_code == 200:
             return True, f"HTTP {response.status_code}", elapsed

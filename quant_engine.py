@@ -47,6 +47,10 @@ STOP_FILE = BASE_DIR / "STOP"
 #   invalid amount for a marketable BUY order ($0.999), min size: $1
 MIN_BUY_AMOUNT_USDC = 1.0
 
+# 冷启动预热状态：进程刚启动时代理隧道可能未就绪，首轮对账允许原地重试一次
+_PROCESS_START_TS = time.time()
+_COLD_START_WARMUP = {"done": False}
+
 
 def portfolio_path() -> Path:
     """返回当前模式对应的账本文件路径。
@@ -895,13 +899,40 @@ def _run_quant_cycle_inner(risk: RiskEnvelope, budget_seconds: int, round_starte
                 pass
             return {}
         except Exception as reconciliation_error:
-            record_trading_error("RECONCILIATION", reconciliation_error, context="本轮已跳过，不修改账本或提交订单")
-            print(f"[对账失败] 本轮已跳过，不修改账本或提交订单: {reconciliation_error}")
-            try:
-                refresh_dashboard_from_disk()
-            except Exception as dashboard_error:
-                print(f"[告警页面刷新失败] {dashboard_error}")
-            return {}
+            # 冷启动预热：进程刚起来时，代理隧道可能还没完全就绪，
+            # 首轮对账容易撞上 connect 卡死。这里原地重试一次
+            # （而不是等 180 秒后的下一轮）——实测首轮失败后立即重试即成功。
+            if _COLD_START_WARMUP.get("done") is not True and round_started - _PROCESS_START_TS < 300:
+                print(f"[冷启动预热] 首轮对账失败，立即重试一次: {reconciliation_error}")
+                time.sleep(3)
+                try:
+                    from portfolio_reconciliation import reconcile as reconcile_again
+
+                    state = reconcile_again(apply=True, backup=False)
+                    _COLD_START_WARMUP["done"] = True
+                    print("[冷启动预热] 重试成功，对账已完成。")
+                except Exception as retry_error:
+                    record_trading_error(
+                        "RECONCILIATION", reconciliation_error,
+                        context="本轮已跳过，不修改账本或提交订单（冷启动重试也失败）",
+                    )
+                    print(f"[对账失败] 本轮已跳过: {retry_error}")
+                    try:
+                        refresh_dashboard_from_disk()
+                    except Exception:
+                        pass
+                    return {}
+            else:
+                record_trading_error(
+                    "RECONCILIATION", reconciliation_error,
+                    context="本轮已跳过，不修改账本或提交订单",
+                )
+                print(f"[对账失败] 本轮已跳过，不修改账本或提交订单: {reconciliation_error}")
+                try:
+                    refresh_dashboard_from_disk()
+                except Exception as dashboard_error:
+                    print(f"[告警页面刷新失败] {dashboard_error}")
+                return {}
     else:
         state = load_portfolio(risk)
     data_layer = PolymarketDataLayer()
