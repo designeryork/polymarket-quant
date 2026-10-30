@@ -174,17 +174,27 @@ class PolymarketDataLayer:
         """带限流退避与通道故障回退的请求。
 
         * 429 —— 遵守 Retry-After 退避重试（限流是突发性的，退避后通常立即恢复）；
-        * 代理/连接异常 —— 改用直连重试一次；
+        * 代理/连接异常 —— 重新探测可用通道后重试一次；
         * 其它异常直接抛出，交由调用方按 fail-closed 处理。
+
+        超时拆分为 (connect, read)：代理的 CONNECT 隧道偶发卡死时，
+        用较小的 connect timeout 快速失败，避免整轮时间被一次卡死吃掉。
         """
+        kwargs.setdefault("connect_timeout", 8)
         try:
             return rate_limiter.request_with_retry(self.session, method, url, **kwargs)
-        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectTimeout) as exc:
             if self._proxy_failed:
                 raise
             self._proxy_failed = True
-            print("[网络回退] 代理通道异常，切换为直连重试一次。")
-            return rate_limiter.request_with_retry(self._direct_session, method, url, **kwargs)
+            print(f"[网络自愈] 通道异常({type(exc).__name__})，重新探测可用通道后重试。")
+            try:
+                proxy_detector.get_detector().refresh()
+                self.session = proxy_detector.build_session()
+                self.session.headers.update({"User-Agent": "PolymarketQuantAgent/1.0"})
+            except Exception:
+                raise
+            return rate_limiter.request_with_retry(self.session, method, url, **kwargs)
 
     def fetch_active_markets(self, limit: int = 30, offset: int = 0) -> List[Dict[str, Any]]:
         """拉取活跃市场列表。

@@ -131,6 +131,8 @@ def request_with_retry(
     max_backoff: float = 30.0,
     throttle: bool = True,
     respect_budget: bool = True,
+    connect_timeout: Optional[float] = None,
+    read_timeout: Optional[float] = None,
     **kwargs: Any,
 ) -> requests.Response:
     """带限流感知重试的请求。
@@ -141,8 +143,35 @@ def request_with_retry(
     * 4xx（除 429）—— 立即抛出（重试无意义）；
     * **轮次预算耗尽 —— 立即抛 RoundBudgetExceeded，不再重试**
       （这是"本轮该收手"的信号，不是"再试一次也许能成"）。
+
+    connect_timeout / read_timeout
+    --------------------------------
+    实测（2026-10-30）：唯一可用通道是本地代理（直连 data-api 在国内超时），
+    而代理的 CONNECT 隧道**偶发卡死**——正常建立只需 0.15s，
+    卡住时则整整耗尽 connect timeout（原先 25s）。
+    一次卡死就吃掉 25 秒，一轮 180+ 请求中若有几个卡死，
+    整轮节奏就被彻底打乱。
+
+    因此把超时拆开：
+    * connect_timeout —— 隧道建立用，给小值（如 8s）快速失败并换节点/换通道；
+    * read_timeout    —— 等待响应用，给较大值（如 25s）。
+    requests 的 timeout 参数支持 (connect, read) 元组。
     """
     last_error: Optional[Exception] = None
+
+    # 拆分连接与读取超时
+    if connect_timeout is not None or read_timeout is not None:
+        original = kwargs.get("timeout")
+        if isinstance(original, tuple):
+            base_connect, base_read = original
+        elif original is None:
+            base_connect = base_read = None
+        else:
+            base_connect = base_read = original
+        kwargs["timeout"] = (
+            connect_timeout if connect_timeout is not None else base_connect,
+            read_timeout if read_timeout is not None else base_read,
+        )
 
     for attempt in range(max_attempts):
         # 预算检查：本轮时间不够了就别再重试，快速失败让本轮收尾

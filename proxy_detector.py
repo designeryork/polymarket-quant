@@ -231,6 +231,28 @@ class ProxyDetector:
             self.exit_info = fetch_exit_info(self.selected_url)
         return self.summary()
 
+    def refresh(self, probe_timeout: float = 8.0) -> Dict[str, Any]:
+        """强制重新探测可用通道。
+
+        用于通道卡死时的自愈：代理节点可能已经切换、端口可能已变，
+        或者先前选中的通道本身失效了。此时重新走一遍候选列表，
+        有机会落到一个仍然可用的通道上。
+
+        直连在多数地区不可用（实测 data-api 直连 12s 超时），
+        因此这里不把直连当作有效回退 —— 回退的真实价值在于
+        "换一条代理通道"，而不是"不走代理"。
+        """
+        previous = self.selected_url
+        self._resolved = False
+        self.selected_url = None
+        self.source = ""
+        result = self.detect(force=True, probe_timeout=probe_timeout)
+        if self.selected_url != previous:
+            print(
+                f"[通道自愈] 代理通道已切换: {previous or '无'} -> {self.selected_url or '直连'}"
+            )
+        return result
+
     def session(self) -> requests.Session:
         """构建使用已选通道的会话（trust_env=False，避免被污染的环境变量干扰）。"""
         session = requests.Session()

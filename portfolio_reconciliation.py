@@ -85,13 +85,35 @@ def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> Li
         params = {"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0}
         url = f"{DATA_API}/{endpoint}"
         try:
-            response = rate_limiter.request_with_retry(session, "GET", url, params=params, timeout=25)
-        except requests.exceptions.ProxyError:
-            if direct is None or proxy_failed:
+            # connect timeout 给小值（8s）：代理隧道偶发卡死时快速失败并重试，
+            # 而不是把整轮 25 秒耗在一次卡住的 CONNECT 上。
+            response = rate_limiter.request_with_retry(
+                session, "GET", url, params=params,
+                timeout=(8, 25), connect_timeout=8, read_timeout=25,
+            )
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectTimeout) as exc:
+            # 代理通道不可用（含 CONNECT 卡死）-> 重新探测可用通道后重试。
+            # 注意：直连在多数地区不可用（实测 data-api 直连 12s 超时），
+            # 所以真正的回退是"换一条代理通道"，而不是"不走代理"。
+            if proxy_failed:
                 raise
             proxy_failed = True
-            print("[网络回退] 代理通道异常，切换为直连重试。")
-            response = rate_limiter.request_with_retry(direct, "GET", url, params=params, timeout=25)
+            try:
+                import proxy_detector
+
+                info = proxy_detector.get_detector().refresh()
+                new_session = proxy_detector.build_session()
+                new_session.headers.update({"User-Agent": "PolymarketPortfolioReconciliation/1.0"})
+                print(
+                    f"[网络自愈] 原通道异常({type(exc).__name__})，"
+                    f"重新探测到 {info.get('proxy_url') or '直连'}，重试本请求"
+                )
+                response = rate_limiter.request_with_retry(
+                    new_session, "GET", url, params=params,
+                    timeout=(8, 25), connect_timeout=8, read_timeout=25,
+                )
+            except Exception as heal_error:
+                raise exc from heal_error
         if response.status_code == 429:
             # 重试已耗尽：明确记录限流事实，而不是笼统的"请求失败"
             raise RateLimitError(

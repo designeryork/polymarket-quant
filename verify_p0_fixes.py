@@ -785,9 +785,47 @@ def test_round_budget_and_degradation() -> None:
     check("预算耗尽不记为错误", "except rate_limiter.RoundBudgetExceeded" in eng_src)
 
 
-# ---------------------------------------------------------------- 14. 仓库卫生
+# ---------------------------------------------------------------- 14. 通道自愈与拆分超时
+def test_channel_self_healing() -> None:
+    section("14. 通道自愈与拆分超时")
+    import inspect
+
+    import proxy_detector
+    import rate_limiter
+
+    # 拆分超时：代理 CONNECT 隧道偶发卡死时必须快速失败
+    src = inspect.getsource(rate_limiter.request_with_retry)
+    check("支持 connect_timeout", "connect_timeout" in src)
+    check("支持 read_timeout", "read_timeout" in src)
+    check(
+        "构造 (connect, read) 元组",
+        'kwargs["timeout"] = (' in src,
+        "隧道建立与等待响应需分开计时",
+    )
+
+    # 探测器提供自愈入口
+    check(
+        "探测器提供 refresh() 自愈入口",
+        hasattr(proxy_detector.ProxyDetector, "refresh"),
+        "通道卡死时重新走一遍候选列表，可能落到仍可用的通道",
+    )
+
+    rec_src = (BASE / "portfolio_reconciliation.py").read_text(encoding="utf-8")
+    eng_src = (BASE / "quant_engine.py").read_text(encoding="utf-8")
+    check("对账器使用拆分超时", "connect_timeout=8" in rec_src)
+    check("对账器接入通道自愈", "refresh()" in rec_src)
+    check("引擎使用拆分超时", "connect_timeout" in eng_src)
+    check("引擎接入通道自愈", "refresh()" in eng_src)
+    check(
+        "回退不再退化为直连",
+        "切换为直连重试" not in rec_src,
+        "实测直连 data-api 12s 超时，直连回退无意义",
+    )
+
+
+# ---------------------------------------------------------------- 15. 仓库卫生
 def test_repo_hygiene() -> None:
-    section("14. 仓库与凭证卫生")
+    section("15. 仓库与凭证卫生")
     gitignore = (BASE / ".gitignore").read_text(encoding="utf-8")
     for pattern in (".env", "state/", "logs/", "003_MataMask 钱包/", "build_launcher/", "__pycache__/"):
         check(f".gitignore 覆盖 {pattern}", pattern in gitignore)
@@ -836,6 +874,7 @@ def main() -> int:
     test_order_amount_minimum()
     test_market_circuit()
     test_round_budget_and_degradation()
+    test_channel_self_healing()
     test_repo_hygiene()
 
     print(f"\n{'=' * 70}")
