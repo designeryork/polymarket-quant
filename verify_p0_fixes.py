@@ -294,27 +294,28 @@ def test_order_ledger() -> None:
 def test_exposure_gate() -> None:
     section("4. MAX_CAPITAL_USDC 敞口门禁")
     import quant_engine
-
-    state = {
-        "open_positions": [
-            {"token_id": "T1", "cost_usdc": 2.0},
-            {"token_id": "T2", "cost_usdc": 3.5},
-        ]
-    }
-    exposure = quant_engine.compute_total_exposure(state)
-    check(
-        "敞口 = 持仓成本之和（无在途单时）",
-        abs(exposure - 5.5) < 1e-9,
-        f"={exposure}",
-    )
-
     import order_ledger
 
+    # 关键：必须把账本指向临时文件。
+    # 否则实盘跑起来后真实在途买单会被算进来，测试结果随实盘状态漂移
+    # （这正是本用例此前失败的原因：实盘有 $1.0 在途买单，期望 5.5 实得 6.5）。
+    original_ledger = order_ledger.LEDGER_FILE
     with tempfile.TemporaryDirectory() as tmp:
-        ledger_path = Path(tmp) / "pending_orders.json"
-        original = order_ledger.LEDGER_FILE
-        order_ledger.LEDGER_FILE = ledger_path
+        order_ledger.LEDGER_FILE = Path(tmp) / "pending_orders.json"
         try:
+            state = {
+                "open_positions": [
+                    {"token_id": "T1", "cost_usdc": 2.0},
+                    {"token_id": "T2", "cost_usdc": 3.5},
+                ]
+            }
+            exposure = quant_engine.compute_total_exposure(state)
+            check(
+                "敞口 = 持仓成本之和（无在途单时）",
+                abs(exposure - 5.5) < 1e-9,
+                f"={exposure}",
+            )
+
             order_ledger.record_order(
                 order_id="P1",
                 token_id="T3",
@@ -331,7 +332,7 @@ def test_exposure_gate() -> None:
                 f"={exposure2}（持仓 5.5 + 在途 2.0）",
             )
         finally:
-            order_ledger.LEDGER_FILE = original
+            order_ledger.LEDGER_FILE = original_ledger
 
 
 # ---------------------------------------------------------------- 5. 账本完整性
@@ -547,9 +548,100 @@ def test_rate_limiter() -> None:
     )
 
 
-# ---------------------------------------------------------------- 11. 仓库卫生
+# ---------------------------------------------------------------- 11. 订单金额门槛
+def test_order_amount_minimum() -> None:
+    section("11. 订单金额 $1 最小门槛")
+    import math
+
+    import clob_executor
+    from web3 import Web3
+
+    MIN_AMOUNT = 1.0
+    prices = [0.05, 0.10, 0.15, 0.16, 0.168, 0.19, 0.199, 0.20, 0.21, 0.25,
+              0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.80, 0.85]
+
+    def old_amount(shares, price, tick=0.001):
+        """旧逻辑：引擎 round + 执行器 floor"""
+        decimals = max(1, int(round(-math.log10(tick))))
+        clean_price = round(round(price / tick) * tick, decimals)
+        clean_size = math.floor(shares * 100.0) / 100.0
+        return clean_size * clean_price
+
+    def new_amount(size_usdc, price):
+        """新逻辑：引擎 ceil + 执行器 floor(含 epsilon)"""
+        shares = math.ceil(size_usdc / price * 100.0 - 1e-9) / 100.0
+        eff = math.floor(shares * 100.0 + 1e-6) / 100.0
+        return eff * price
+
+    old_fail = [p for p in prices if old_amount(round(1.0 / p, 4), p) < MIN_AMOUNT - 1e-9]
+    new_fail = [p for p in prices if new_amount(1.0, p) < MIN_AMOUNT - 1e-9]
+
+    check(
+        "旧逻辑确实会跌破 $1（复现原始缺陷）",
+        len(old_fail) >= 5,
+        f"{len(old_fail)}/{len(prices)} 个价格触发：{old_fail[:6]}",
+    )
+    check(
+        "新逻辑在所有价格下均达标",
+        not new_fail,
+        f"失败价格: {new_fail}" if new_fail else f"{len(prices)}/{len(prices)} 全部 >= $1",
+    )
+
+    # 执行器侧真实构造订单，校验 makerAmount
+    original = clob_executor.PolymarketV2Executor.resolve_exchange_and_version
+    clob_executor.PolymarketV2Executor.resolve_exchange_and_version = (
+        lambda self, token_id: (
+            Web3.to_checksum_address("0xE111180000d2663C0091e4f400237545B87B996B"),
+            "2",
+        )
+    )
+    try:
+        ex = clob_executor.PolymarketV2Executor()
+        token = "92708239841263145361017304203618583258102423804507532186791623602897510452108"
+        bad = []
+        for ask in prices:
+            shares = math.ceil(1.0 / ask * 100.0 - 1e-9) / 100.0
+            try:
+                payload = ex.build_and_sign_poly1271_order(
+                    token, "BUY", price=ask, size_shares=shares, tick_size=0.001
+                )
+                amount = int(payload["order"]["makerAmount"]) / 1_000_000
+                if amount < MIN_AMOUNT - 1e-9:
+                    bad.append((ask, amount))
+            except Exception:
+                bad.append((ask, "exception"))
+        check(
+            "执行器构造的订单金额全部 >= $1",
+            not bad,
+            f"异常项: {bad[:4]}" if bad else f"{len(prices)} 个价格全部达标",
+        )
+
+        # Fail-closed：金额确实不足时本地拦截，不送交易所
+        try:
+            ex.build_and_sign_poly1271_order(
+                token, "BUY", price=0.05, size_shares=5.0, tick_size=0.001
+            )
+            check("金额不足时本地拦截", False, "未抛出异常")
+        except clob_executor.OrderAmountTooSmall:
+            check("金额不足时本地拦截", True, "抛出 OrderAmountTooSmall，不浪费交易所往返")
+    finally:
+        clob_executor.PolymarketV2Executor.resolve_exchange_and_version = original
+
+    # 浮点陷阱回归：4.77*100 = 476.99999999999994，floor 必须加 epsilon
+    check(
+        "floor 浮点陷阱已修正",
+        math.floor(4.77 * 100.0 + 1e-6) == 477,
+        f"floor(4.77*100)={math.floor(4.77*100.0)} -> 加 epsilon={math.floor(4.77*100.0+1e-6)}",
+    )
+
+    eng_src = (BASE / "quant_engine.py").read_text(encoding="utf-8")
+    check("引擎用 ceil 换算份额", "math.ceil(size_usdc / best_ask" in eng_src)
+    check("引擎含 $1 门槛预检", "AMOUNT_BELOW_MIN" in eng_src)
+
+
+# ---------------------------------------------------------------- 12. 仓库卫生
 def test_repo_hygiene() -> None:
-    section("11. 仓库与凭证卫生")
+    section("12. 仓库与凭证卫生")
     gitignore = (BASE / ".gitignore").read_text(encoding="utf-8")
     for pattern in (".env", "state/", "logs/", "003_MataMask 钱包/", "build_launcher/", "__pycache__/"):
         check(f".gitignore 覆盖 {pattern}", pattern in gitignore)
@@ -595,6 +687,7 @@ def main() -> int:
     test_proxy_detector()
     test_scan_coverage()
     test_rate_limiter()
+    test_order_amount_minimum()
     test_repo_hygiene()
 
     print(f"\n{'=' * 70}")

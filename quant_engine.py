@@ -42,6 +42,10 @@ SIGNALS_LOG_FILE = LOGS_DIR / "signals_and_skips.jsonl"
 DASHBOARD_HTML_FILE = BASE_DIR / "dashboard.html"
 STOP_FILE = BASE_DIR / "STOP"
 
+# CLOB 最小买单金额（美元）。低于此值交易所直接拒绝：
+#   invalid amount for a marketable BUY order ($0.999), min size: $1
+MIN_BUY_AMOUNT_USDC = 1.0
+
 
 def portfolio_path() -> Path:
     """返回当前模式对应的账本文件路径。
@@ -1132,7 +1136,12 @@ def run_quant_cycle() -> Dict[str, Any]:
             continue
 
         # 执行撮合 (按真实卖一价 Best Ask 买入，绝不用 Mid price!)
-        shares = round(size_usdc / best_ask, 4)
+        # 份额换算必须**向上取整**：CLOB 要求买单金额 >= $1，
+        # 而执行器会把份额截断到 2 位小数（floor），截断会让金额缩水。
+        # 例：$1.00 @ best_ask=0.199 -> 5.0251 份，截断成 5.02 份
+        #     -> 5.02*0.199 = $0.99898 < $1，被 CLOB 以 HTTP 400 拒绝。
+        # 用 ceil 换算 + 向上对齐到 2 位小数，保证截断后仍达标。
+        shares = math.ceil(size_usdc / best_ask * 100.0 - 1e-9) / 100.0
         # Polymarket 多数市场 orderMinSize >= 5 shares
         MIN_SHARES = 5.0
         if shares < MIN_SHARES:
@@ -1145,6 +1154,33 @@ def run_quant_cycle() -> Dict[str, Any]:
                     question,
                     "SIZE_BELOW_MIN_SHARES",
                     f"份额 {shares:.2f} < 5 且补足至5份名义 ${padded_cost:.2f} 超过单笔上限/现金",
+                    metrics_summary,
+                )
+                continue
+
+        # 二次校验：实际下单金额（按截断后的份额计）必须达到 $1 最小门槛。
+        # 这里模拟执行器的 floor 截断，用与真实下单完全一致的算法预检，
+        # 避免把注定失败的订单送到交易所。
+        #
+        # 注意 floor 的浮点陷阱：4.77 * 100 = 476.99999999999994，
+        # 直接 floor 会得到 476 而非 477，凭空少掉 0.01 份（$0.0021）。
+        # 必须加 epsilon 修正，这与执行器里的处理保持一致。
+        effective_shares = math.floor(shares * 100.0 + 1e-6) / 100.0
+        effective_amount = effective_shares * best_ask
+        if effective_amount < MIN_BUY_AMOUNT_USDC - 1e-9:
+            # 向上补足到刚好达标（多付不足 1 tick，可忽略）
+            needed_shares = math.ceil((MIN_BUY_AMOUNT_USDC + 1e-9) / best_ask * 100.0 - 1e-6) / 100.0
+            needed_cost = needed_shares * best_ask
+            if needed_cost <= risk.max_single_bet and needed_cost <= state["cash_usdc"]:
+                shares = needed_shares
+                size_usdc = round(needed_cost, 2)
+                metrics_summary["order_amount_adjusted"] = round(needed_cost, 4)
+            else:
+                record_skip(
+                    question,
+                    "AMOUNT_BELOW_MIN",
+                    f"实际下单金额 ${effective_amount:.4f} 低于最小下单额 ${MIN_BUY_AMOUNT_USDC:.2f}，"
+                    f"补足至 ${needed_cost:.2f} 会超过单笔上限/现金",
                     metrics_summary,
                 )
                 continue

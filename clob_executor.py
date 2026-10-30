@@ -48,6 +48,18 @@ EXPECTED_SIGNATURE_LENGTH = (
     2 + 130 + 64 + 64 + len(ORDER_TYPE_STR.encode("utf-8").hex()) + 4
 )
 
+# CLOB 的最小买单金额：$1（以 6 位小数的 base units 表示）。
+# 低于此值会被 CLOB 拒绝：invalid amount for a marketable BUY order, min size: $1
+MIN_BUY_AMOUNT_USDC_UNITS = 1_000_000
+
+
+class OrderAmountTooSmall(ValueError):
+    """买单金额低于 CLOB 的 $1 最小下单额。
+
+    单独成类，便于上层把它归类为"可重试但需调参"的错误，
+    而不是笼统的交易异常。
+    """
+
 
 def strip_hex_prefix(value: str) -> str:
     """安全地移除一次 `0x` 前缀。
@@ -119,10 +131,30 @@ class PolymarketV2Executor:
         # 对齐价格与份额精度 (6位小数 base units)
         decimals = max(1, int(round(-math.log10(tick_size))))
         clean_price = round(round(price / tick_size) * tick_size, decimals)
-        clean_size = math.floor(size_shares * 100.0) / 100.0
+
+        # 份额向下截断到 2 位小数（Polymarket 的份额精度）。
+        # 关键：截断会让实际金额**小于**预期，可能跌破 CLOB 的 $1 最小下单额。
+        # 例：引擎算 shares=5.0251（意图 $1.00 @0.199），floor 后 5.02 份
+        #     → 5.02*0.199 = $0.99898，被 CLOB 以 HTTP 400 拒绝
+        #     （invalid amount for a marketable BUY order ($0.999), min size: $1）
+        # 因此这里改为**向上取整**，宁可略微多付一点，也不能让金额跌破门槛。
+        #
+        # 另注 floor 的浮点陷阱：4.77 * 100 = 476.99999999999994，
+        # 直接 floor 会得 476 而非 477（凭空少 0.01 份）。加 epsilon 修正。
+        clean_size = math.ceil(size_shares * 100.0 - 1e-6) / 100.0
+        if clean_size <= 0:
+            clean_size = math.ceil(size_shares * 100.0) / 100.0
 
         size_units = int(round(clean_size * 1_000_000))
         usdc_units = int(round(clean_size * clean_price * 1_000_000))
+
+        # Fail-closed：买单金额必须达到 $1 最小门槛，否则直接拒绝构造订单。
+        # 与其让 CLOB 返回 400（浪费一次往返并在日志里留下误报），不如在本地拦下。
+        if side_int == 0 and usdc_units < MIN_BUY_AMOUNT_USDC_UNITS:
+            raise OrderAmountTooSmall(
+                f"买单金额 ${usdc_units / 1e6:.6f} 低于最小下单额 ${MIN_BUY_AMOUNT_USDC_UNITS / 1e6:.2f} "
+                f"(shares={size_shares} -> {clean_size} @ price={clean_price})"
+            )
 
         if side_int == 0:  # BUY: 付出 pUSD (makerAmount)，获得 shares (takerAmount)
             maker_amt, taker_amt = usdc_units, size_units

@@ -30,7 +30,7 @@ CATEGORIES = {
     },
     "ORDER_AMOUNT_INVALID": {
         "title": "订单金额或精度不符合规则",
-        "handling": "订单未成交；按市场最小金额与精度重新计算，不能将其记为已成交。",
+        "handling": "订单未成交；按市场最小金额与精度重新计算，不能将其记为已成交。若为买单金额低于 $1 门槛（invalid amount ... min size: $1），说明份额换算后被截断导致金额缩水，需上调换算精度或加安全边际。",
     },
     "PROXY_ERROR": {
         "title": "本地代理/VPN 通道故障",
