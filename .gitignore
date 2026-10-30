@@ -45,3 +45,8 @@ Thumbs.db
 *.gif
 *.bmp
 *.webp
+
+# 例外：Screen-shot/ 下的截图是文档的一部分（供后续 AI 交接阅读），需要入库
+!Screen-shot/
+!Screen-shot/*.png
+!Screen-shot/*.jpg
