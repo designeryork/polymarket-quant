@@ -302,6 +302,56 @@ class PolymarketV2Executor:
     def get_open_orders(self) -> List[Dict[str, Any]]:
         return self.client.get_orders()
 
+    def get_live_orders_by_token(self, refresh: bool = True) -> Dict[str, List[Dict[str, Any]]]:
+        """返回按 token_id 分组的链上活跃挂单。
+
+        **这是防重复挂单的权威来源。**
+
+        背景：引擎原先只用「本地持仓的 tp_order_id」+「本地挂单账本」判断
+        是否已有在途卖单。但这两个本地状态都可能与链上实际状态漂移：
+        * 对账器重建持仓时，tp_order_id 只从**本地旧状态**继承
+          （portfolio_reconciliation.py: `old.get("tp_order_id")`），
+          链上的活跃挂单并未参与 —— 持仓一旦被重建，tp_order_id 就丢了；
+        * 挂单账本依赖本进程写盘，与链上状态之间存在时间差。
+
+        实测事故：同一 token 在 0.62 秒内被提交两次卖单，第二次因
+        余额已被自己的第一单占用而被 CLOB 拒绝
+        （not enough balance / allowance: balance 5.00,
+          sum of active orders 5.00, order amount 5.00）。
+
+        因此挂卖单前必须查链上活跃挂单，而不是只信本地状态。
+        """
+        if refresh or not hasattr(self, "_live_orders_cache"):
+            try:
+                raw = self.client.get_orders()
+                rows = raw.get("data", []) if isinstance(raw, dict) else (raw or [])
+            except Exception:
+                rows = []
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            for row in rows:
+                token_id = str(row.get("asset_id") or "")
+                if not token_id:
+                    continue
+                grouped.setdefault(token_id, []).append(row)
+            self._live_orders_cache = grouped
+        return getattr(self, "_live_orders_cache", {})
+
+    def has_live_sell_order(self, token_id: str, refresh: bool = True) -> bool:
+        """该 token 是否已有链上活跃的卖单（含止盈单与平仓单）。"""
+        for row in self.get_live_orders_by_token(refresh=refresh).get(str(token_id), []):
+            if str(row.get("side", "")).upper() == "SELL":
+                if str(row.get("status", "LIVE")).upper() in ("LIVE", "OPEN"):
+                    return True
+        return False
+
+    def find_live_sell_order(self, token_id: str, refresh: bool = True) -> Optional[Dict[str, Any]]:
+        """返回该 token 的链上活跃卖单（若有）。"""
+        for row in self.get_live_orders_by_token(refresh=refresh).get(str(token_id), []):
+            if str(row.get("side", "")).upper() == "SELL":
+                if str(row.get("status", "LIVE")).upper() in ("LIVE", "OPEN"):
+                    return row
+        return None
+
 
 def _pick_liquid_market():
     """选取 24h 成交活跃的市场，返回 (question, token_id, best_ask, mid, tick_size)。"""

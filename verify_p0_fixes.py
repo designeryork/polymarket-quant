@@ -823,9 +823,68 @@ def test_channel_self_healing() -> None:
     )
 
 
-# ---------------------------------------------------------------- 15. 仓库卫生
+# ---------------------------------------------------------------- 15. 链上挂单权威判定
+def test_chain_order_authority() -> None:
+    section("15. 链上挂单权威判定（防重复挂卖单）")
+    import inspect
+
+    import clob_executor
+    import market_circuit
+
+    # 执行器提供按 token 查询链上活跃挂单的能力
+    exec_src = inspect.getsource(clob_executor.PolymarketV2Executor)
+    check("执行器提供链上挂单分组查询", "def get_live_orders_by_token" in exec_src)
+    check("执行器提供活跃卖单判定", "def has_live_sell_order" in exec_src)
+    check("执行器提供活跃卖单定位", "def find_live_sell_order" in exec_src)
+
+    # 对账器以链上挂单为准恢复 tp_order_id
+    import portfolio_reconciliation as pr
+
+    rec_src = inspect.getsource(pr.build_reconciled_state)
+    check(
+        "对账器从链上挂单恢复 tp_order_id",
+        "chain_sell_orders.get(token_id)" in rec_src,
+        "本地 tp_order_id 可能与链上状态漂移，链上才是权威",
+    )
+
+    # 引擎挂卖单前查链上
+    eng_src = (BASE / "quant_engine.py").read_text(encoding="utf-8")
+    check("引擎挂卖单前查链上活跃卖单", "find_live_sell_order(token_id" in eng_src)
+    check("引擎回填链上挂单到本地账本", "链上已存在活跃卖单" in eng_src)
+    check("引擎识别余额冲突", "is_balance_error" in eng_src)
+    check("余额冲突进入冷却", "has_balance_conflict" in eng_src)
+
+    # 余额冲突识别
+    check(
+        "识别 not enough balance",
+        market_circuit.is_balance_error(
+            "not enough balance / allowance: the balance is not enough -> "
+            "balance: 5000000, sum of active orders: 5000000, order amount: 5000000"
+        ),
+    )
+    check(
+        "不误判 $1 金额错误",
+        not market_circuit.is_balance_error("invalid amount for a marketable BUY order ($0.999)"),
+    )
+    check(
+        "不误判 503",
+        not market_circuit.is_balance_error("503 trading is disabled"),
+    )
+
+    # 余额冲突冷却行为
+    with tempfile.TemporaryDirectory() as tmp:
+        breaker = market_circuit.MarketCircuitBreaker(Path(tmp) / "circuit.json")
+        token = "BAL_TOKEN"
+        check("初始无余额冲突", breaker.has_balance_conflict(token) is False)
+        breaker.record_balance_conflict(token, "not enough balance")
+        check("冲突后进入冷却", breaker.has_balance_conflict(token) is True)
+        breaker._state[token]["next_retry_at"] = 0  # 模拟冷却到期
+        check("冷却到期后允许重试", breaker.has_balance_conflict(token) is False)
+
+
+# ---------------------------------------------------------------- 16. 仓库卫生
 def test_repo_hygiene() -> None:
-    section("15. 仓库与凭证卫生")
+    section("16. 仓库与凭证卫生")
     gitignore = (BASE / ".gitignore").read_text(encoding="utf-8")
     for pattern in (".env", "state/", "logs/", "003_MataMask 钱包/", "build_launcher/", "__pycache__/"):
         check(f".gitignore 覆盖 {pattern}", pattern in gitignore)
@@ -875,6 +934,7 @@ def main() -> int:
     test_market_circuit()
     test_round_budget_and_degradation()
     test_channel_self_healing()
+    test_chain_order_authority()
     test_repo_hygiene()
 
     print(f"\n{'=' * 70}")

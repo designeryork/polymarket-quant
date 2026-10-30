@@ -720,10 +720,51 @@ def evaluate_existing_positions(
                     unrealized_sum += pnl_usdc
                     remaining_positions.append(pos)
                     continue
+                # 余额冲突冷却：该 token 的份额已被其它卖单占用，
+                # 再挂新单必然被拒（not enough balance / allowance）。
+                if market_circuit.get_breaker().has_balance_conflict(token_id):
+                    append_audit_log({
+                        "action": "LIVE_BALANCE_CONFLICT_SKIP",
+                        "token_id": token_id,
+                        "reason": "余额已被其它活跃卖单占用，冷却期内不重复挂单",
+                    })
+                    unrealized_sum += pnl_usdc
+                    remaining_positions.append(pos)
+                    continue
                 try:
                     ex = get_live_executor()
                     # 该 token 是否已有在途卖单（防止同一仓位挂出多张卖单导致超额卖出）
                     has_open_sell = order_ledger.has_open_sell_for_token(token_id)
+                    # **权威判定**：以链上活跃挂单为准。
+                    # 本地 tp_order_id 与挂单账本都可能与链上状态漂移
+                    # （对账器重建持仓时 tp_order_id 会丢失），
+                    # 实测曾导致同一 token 在 0.62 秒内被提交两次卖单，
+                    # 第二次因余额被自己的第一单占用而被 CLOB 拒绝。
+                    live_sell = ex.find_live_sell_order(token_id, refresh=True)
+                    if live_sell:
+                        has_open_sell = True
+                        chain_order_id = str(live_sell.get("id") or "")
+                        # 把链上的真实挂单回填到持仓与账本，消除本地漂移
+                        if chain_order_id and not pos.get("tp_order_id"):
+                            pos["tp_order_id"] = chain_order_id
+                        order_ledger.record_order(
+                            order_id=chain_order_id or f"chain-{token_id[:12]}",
+                            token_id=token_id,
+                            side="SELL",
+                            intent=order_ledger.INTENT_TAKE_PROFIT,
+                            price=float(live_sell.get("price") or 0),
+                            shares=float(live_sell.get("original_size") or 0),
+                            notional_usdc=round(
+                                float(live_sell.get("price") or 0)
+                                * float(live_sell.get("original_size") or 0),
+                                6,
+                            ),
+                            event_id=pos.get("event_id", ""),
+                            market_question=pos.get("market_question", ""),
+                            outcome=pos.get("outcome", ""),
+                            status=order_ledger.STATUS_ACCEPTED,
+                            notes="链上已存在活跃卖单，已回填本地记录",
+                        )
 
                     if exit_reason:
                         if has_open_sell:
@@ -811,10 +852,19 @@ def evaluate_existing_positions(
                                     )
                 except Exception as le:
                     append_audit_log({"action": "LIVE_EXIT_FAILED", "error": str(le)[:300], "reason": exit_reason})
+                    # 若余额/授权不足：说明该 token 的份额已被其它卖单占用，
+                    # 再重试只会继续被拒。标记为卖出阻塞，等持仓变化后再处理。
+                    if market_circuit.is_balance_error(le):
+                        market_circuit.get_breaker().record_balance_conflict(token_id, str(le)[:200])
+                        record_trading_error(
+                            "CLOSE", le, pos.get("market_question", ""), pos.get("outcome", ""),
+                            context=exit_reason or "LIVE_TP",
+                            severity="warning",
+                        )
                     # 若是"市场不可交易"，记入熔断器并降低严重度：
                     # 这是交易所侧的市场状态，不是账号或代码故障，
                     # 不该在告警面板上刷成 critical 淹没真实问题。
-                    if market_circuit.is_not_tradable_error(le):
+                    elif market_circuit.is_not_tradable_error(le):
                         market_circuit.get_breaker().record_failure(token_id, str(le)[:200])
                         record_trading_error(
                             "CLOSE", le, pos.get("market_question", ""), pos.get("outcome", ""),

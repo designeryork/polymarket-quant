@@ -302,6 +302,23 @@ def build_reconciled_state(previous: Dict[str, Any], sources: Dict[str, Any]) ->
     open_positions = []
     position_value = 0.0
 
+    # **权威来源**：从链上活跃挂单恢复每个 token 的卖单 ID。
+    # 本地 tp_order_id 可能与链上状态漂移（持仓一旦被重建就会丢失），
+    # 实测曾因此对同一 token 重复挂卖单，导致余额被自己的第一单占用而被拒。
+    chain_sell_orders: Dict[str, str] = {}
+    for row in sources.get("open_orders") or []:
+        token_id = str(row.get("asset_id") or "")
+        if not token_id:
+            continue
+        if str(row.get("side", "")).upper() != "SELL":
+            continue
+        status = str(row.get("status", "LIVE")).upper()
+        if status not in ("LIVE", "OPEN"):
+            continue
+        order_id = str(row.get("id") or "")
+        if order_id:
+            chain_sell_orders[token_id] = order_id
+
     for raw in sources["positions"]:
         token_id = str(raw.get("asset") or "")
         shares = finite_number(raw.get("size"), "position.size")
@@ -344,7 +361,7 @@ def build_reconciled_state(previous: Dict[str, Any], sources: Dict[str, Any]) ->
                 "book_updated_at": utc_now(),
                 "book_status": "RESOLVED" if redeemable else "DATA_API",
                 "live_order_id": old.get("live_order_id"),
-                "tp_order_id": old.get("tp_order_id"),
+                "tp_order_id": chain_sell_orders.get(token_id) or old.get("tp_order_id"),
                 "exit_order_id": old.get("exit_order_id"),
                 "redeemable": redeemable,
                 "data_source": "Polymarket Data API positions + reconstructed trades",

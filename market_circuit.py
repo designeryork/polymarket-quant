@@ -65,6 +65,21 @@ def is_not_tradable_error(error: Any) -> bool:
     return False
 
 
+def is_balance_error(error: Any) -> bool:
+    """判断异常是否表示"余额/授权不足"。
+
+    CLOB 的响应形如：
+        not enough balance / allowance: the balance is not enough ->
+        balance: 5000000, sum of active orders: 5000000,
+        sum of matched orders: 0, order amount (inc. fees): 5000000
+
+    含义：该 token 的链上份额已被**其它活跃卖单**占用，再挂新单必然被拒。
+    这不是账户问题，重试无意义 —— 应当等待持仓或挂单状态变化后再处理。
+    """
+    text = str(error).lower()
+    return "not enough balance" in text or "allowance" in text
+
+
 class MarketCircuitBreaker:
     """按 token 维度的不可交易熔断器。"""
 
@@ -148,6 +163,36 @@ class MarketCircuitBreaker:
         if key in self._state:
             self._state.pop(key, None)
             self._save()
+
+    def record_balance_conflict(self, token_id: str, detail: str = "") -> Dict[str, Any]:
+        """记录一次"余额/授权不足"冲突。
+
+        含义：该 token 的份额已被其它活跃卖单占用，再挂新单必然被拒。
+        处置：进入一个较短的冷却期，期间不再尝试挂卖单。
+        这比每轮重试（每轮都被拒、每次都刷错误）要好得多。
+        冷却期过后允许重新尝试 —— 因为挂单成交后份额就释放了。
+        """
+        key = str(token_id)
+        entry = self._state.get(key) or {}
+        # 注意：余额冲突不计入"市场不可交易"的连续失败计数，两者语义不同
+        entry["balance_conflicts"] = int(entry.get("balance_conflicts", 0)) + 1
+        entry["last_balance_conflict_at"] = time.time()
+        entry["last_balance_conflict_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        entry["last_balance_detail"] = str(detail)[:200]
+        # 冷却 10 分钟起步，随冲突次数递增
+        cooldown = min(BASE_COOLDOWN * 0.67 * (2 ** (entry["balance_conflicts"] - 1)), MAX_COOLDOWN)
+        entry["next_retry_at"] = time.time() + cooldown
+        entry["cooldown_seconds"] = cooldown
+        self._state[key] = entry
+        self._save()
+        return entry
+
+    def has_balance_conflict(self, token_id: str) -> bool:
+        """该 token 是否处于余额冲突冷却期。"""
+        entry = self._state.get(str(token_id)) or {}
+        if not entry.get("balance_conflicts"):
+            return False
+        return time.time() < float(entry.get("next_retry_at", 0))
 
     def status(self, token_id: Optional[str] = None) -> Dict[str, Any]:
         if token_id:
