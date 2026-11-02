@@ -25,6 +25,7 @@ Polymarket CLOB 会对某些市场返回 `503 trading is disabled` ——
 被熔断的市场不会下单，但也只是暂时不尝试，不会改动账本或持仓。
 """
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -168,9 +169,13 @@ class MarketCircuitBreaker:
         """记录一次"余额/授权不足"冲突。
 
         含义：该 token 的份额已被其它活跃卖单占用，再挂新单必然被拒。
-        处置：进入一个较短的冷却期，期间不再尝试挂卖单。
-        这比每轮重试（每轮都被拒、每次都刷错误）要好得多。
-        冷却期过后允许重新尝试 —— 因为挂单成交后份额就释放了。
+        处置：进入一个**固定的短冷却期**，期间不再尝试挂卖单。
+
+        为什么不用指数退避（旧实现 900s × 0.67 × 2ⁿ，上限 6 小时）：
+        余额冲突绝大多数是"自己的挂单还占着份额"，撤单后几秒就释放。
+        对已经触发止损的仓位套用指数退避，等价于"亏得越多、处理越慢"——
+        实测会把止损冻住十几分钟到数小时。市场级停摆由 consecutive_failures 那条
+        独立通道负责，两者不该共用退避曲线。
         """
         key = str(token_id)
         entry = self._state.get(key) or {}
@@ -179,8 +184,10 @@ class MarketCircuitBreaker:
         entry["last_balance_conflict_at"] = time.time()
         entry["last_balance_conflict_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         entry["last_balance_detail"] = str(detail)[:200]
-        # 冷却 10 分钟起步，随冲突次数递增
-        cooldown = min(BASE_COOLDOWN * 0.67 * (2 ** (entry["balance_conflicts"] - 1)), MAX_COOLDOWN)
+        cooldown = float(os.getenv("BALANCE_CONFLICT_COOLDOWN", "60"))
+        if not (cooldown > 0):  # NaN / 0 / 负数一律回落默认值
+            cooldown = 60.0
+        cooldown = min(cooldown, MAX_COOLDOWN)
         entry["next_retry_at"] = time.time() + cooldown
         entry["cooldown_seconds"] = cooldown
         self._state[key] = entry

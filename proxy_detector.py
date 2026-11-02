@@ -18,10 +18,10 @@ Windows 上通常同时存在两类本地代理：
 1. Windows 注册表 `ProxyServer`（浏览器实际使用的设置，最可信）
 2. 环境变量中的代理地址
 3. 常见本地代理端口（7890 / 7897 / 10809 / 1080 / 10808 / 8888 / 8118 ...）
-4. 直连（trust_env=False）
 
 每个候选都用一个**轻量只读**请求验证（只取 1 条数据的 positions 接口），
-选定第一个能真正连通 Polymarket 的通道。
+选定第一个能真正连通 Polymarket 的通道。没有可用代理时 fail-closed，
+不退回当前网络环境下不可用的直连。
 """
 import os
 import re
@@ -178,6 +178,12 @@ def fetch_exit_info(url: Optional[str], timeout: float = 15.0) -> Dict[str, Any]
             pass
 
 
+# 探测失败的结果只缓存这么久：代理节点切换/恢复后必须能自愈。
+# 旧实现把"没找到可用代理"也永久缓存（_resolved=True + selected_url=None），
+# 结果切换代理的瞬间失败一次，引擎就再也发不出请求。
+NEGATIVE_CACHE_TTL = 30.0
+
+
 class ProxyDetector:
     """探测并缓存可用的网络通道。"""
 
@@ -191,13 +197,22 @@ class ProxyDetector:
         self._resolved = False
 
     def detect(self, force: bool = False, probe_timeout: float = 12.0) -> Dict[str, Any]:
-        """执行一次探测，返回结果摘要。
-
-        顺序：注册表 -> 环境变量 -> 常见端口 -> 直连。
-        直连放在最后，因为很多地区直连 Polymarket 会被限速或阻断。
-        """
+        """执行一次代理探测；没有可用代理时明确失败，不退回直连。"""
         if self._resolved and not force:
-            return self.summary()
+            if self.selected_url:
+                return self.summary()
+            # 上次探测是失败的：只在 TTL 内复用，过期后自动重新探测
+            age = None
+            if self.checked_at:
+                try:
+                    from datetime import datetime, timezone
+
+                    age = (datetime.now(timezone.utc) - datetime.fromisoformat(self.checked_at)).total_seconds()
+                except (TypeError, ValueError):
+                    age = None
+            if age is not None and age < NEGATIVE_CACHE_TTL:
+                return self.summary()
+            force = True
 
         self.attempts = []
         for candidate in candidate_proxies():
@@ -218,14 +233,9 @@ class ProxyDetector:
                 break
 
         if self.selected_url is None:
-            ok, detail, elapsed = _probe_url(None, timeout=probe_timeout)
-            self.attempts.append(
-                {"url": "(直连)", "source": "直连回退", "ok": ok, "detail": detail, "latency_s": round(elapsed, 2)}
-            )
-            if ok:
-                self.selected_url = None
-                self.source = "直连(未使用代理)"
-                self.latency = elapsed
+            self.source = "未找到可用代理（直连已禁用）"
+            self.latency = 0.0
+            self.exit_info = {}
 
         self._resolved = True
         from datetime import datetime, timezone
@@ -236,16 +246,7 @@ class ProxyDetector:
         return self.summary()
 
     def refresh(self, probe_timeout: float = 8.0) -> Dict[str, Any]:
-        """强制重新探测可用通道。
-
-        用于通道卡死时的自愈：代理节点可能已经切换、端口可能已变，
-        或者先前选中的通道本身失效了。此时重新走一遍候选列表，
-        有机会落到一个仍然可用的通道上。
-
-        直连在多数地区不可用（实测 data-api 直连 12s 超时），
-        因此这里不把直连当作有效回退 —— 回退的真实价值在于
-        "换一条代理通道"，而不是"不走代理"。
-        """
+        """强制重新探测代理通道，失败时保持 fail-closed。"""
         previous = self.selected_url
         self._resolved = False
         self.selected_url = None
@@ -253,16 +254,17 @@ class ProxyDetector:
         result = self.detect(force=True, probe_timeout=probe_timeout)
         if self.selected_url != previous:
             print(
-                f"[通道自愈] 代理通道已切换: {previous or '无'} -> {self.selected_url or '直连'}"
+                f"[通道自愈] 代理通道已切换: {previous or '无'} -> {self.selected_url or '无可用代理'}"
             )
         return result
 
     def session(self) -> requests.Session:
-        """构建使用已选通道的会话（trust_env=False，避免被污染的环境变量干扰）。"""
+        """构建使用已选代理的会话，禁止隐式直连或继承环境变量。"""
+        if not self.selected_url:
+            raise RuntimeError("未找到可用代理；为避免使用不可用直连，本轮网络请求已拒绝。")
         session = requests.Session()
         session.trust_env = False
-        if self.selected_url:
-            session.proxies = {"http": self.selected_url, "https": self.selected_url}
+        session.proxies = {"http": self.selected_url, "https": self.selected_url}
         return session
 
     def summary(self) -> Dict[str, Any]:
@@ -291,9 +293,13 @@ def detect_proxy(force: bool = False) -> Dict[str, Any]:
 
 
 def build_session() -> requests.Session:
-    """构建使用已探测通道的会话（未探测时自动探测一次）。"""
-    if not _DETECTOR._resolved:
-        _DETECTOR.detect()
+    """构建使用已探测通道的会话。
+
+    未探测过 → 探测一次；上次探测失败 → 强制重探（代理切换后能自愈）。
+    """
+    # detect() 自己会处理三种情况：未探测 → 探测；已成功 → 复用；
+    # 上次失败且超过 NEGATIVE_CACHE_TTL → 自动重探。
+    _DETECTOR.detect()
     return _DETECTOR.session()
 
 
@@ -319,22 +325,18 @@ def apply_to_clob_sdk() -> Dict[str, Any]:
 
     url = _DETECTOR.selected_url
     applied = {"ok": False, "proxy": url, "detail": ""}
+    if not url:
+        applied["detail"] = "未找到可用代理，拒绝把 CLOB SDK 配置为直连。"
+        return applied
     try:
         import httpx
         from py_clob_client.http_helpers import helpers
 
-        kwargs = {"http2": True, "timeout": httpx.Timeout(20.0, connect=12.0)}
-        if url:
-            kwargs["proxy"] = url
-        else:
-            kwargs["trust_env"] = False
-
+        kwargs = {"http2": True, "timeout": httpx.Timeout(20.0, connect=12.0), "proxy": url}
         old_client = getattr(helpers, "_http_client", None)
         helpers._http_client = httpx.Client(**kwargs)
         applied["ok"] = True
-        applied["detail"] = (
-            f"已重建 SDK 客户端，代理={url}" if url else "已重建 SDK 客户端，使用直连"
-        )
+        applied["detail"] = f"已重建 SDK 客户端，代理={url}"
         if old_client is not None:
             try:
                 old_client.close()

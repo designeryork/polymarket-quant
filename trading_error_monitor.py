@@ -2,7 +2,9 @@
 import argparse
 import hashlib
 import json
+import os
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -155,6 +157,35 @@ def load_trading_errors(limit: Optional[int] = None) -> List[Dict[str, Any]]:
     return events[:limit] if limit is not None else events
 
 
+def runtime_metadata() -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {
+        "pid": os.getpid(),
+        "code_version": "unknown",
+        "proxy_url": None,
+        "proxy_source": "",
+    }
+    try:
+        metadata["code_version"] = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=BASE_DIR,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        ).strip()
+    except Exception:
+        pass
+    try:
+        import proxy_detector
+
+        detector = proxy_detector.get_detector()
+        if detector._resolved:
+            metadata["proxy_url"] = detector.selected_url
+            metadata["proxy_source"] = detector.source
+    except Exception:
+        pass
+    return metadata
+
+
 def record_trading_error(
     stage: str,
     error: Any,
@@ -185,6 +216,7 @@ def record_trading_error(
         "context": sanitize_error(context, limit=300) if context else "",
         "source": source,
         "source_record": source_record,
+        **runtime_metadata(),
     }
     if any(item.get("event_id") == event["event_id"] for item in load_trading_errors()):
         return event

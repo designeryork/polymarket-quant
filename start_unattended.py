@@ -44,14 +44,65 @@ def loop_running() -> bool:
                 "powershell", "-NoProfile", "-Command",
                 "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
                 "Where-Object { $_.CommandLine -match 'quant_engine\\.py\\s+--loop' } | "
+                "Select-Object -ExpandProperty CommandLine",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        # 纸面进程（--paper）不算实盘实例
+        return any(line.strip() and "--paper" not in line for line in out.splitlines())
+    except Exception:
+        return False
+
+
+def start_watchdog() -> None:
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell", "-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+                "Where-Object { $_.CommandLine -match 'watchdog\\.py' } | "
                 "Select-Object -ExpandProperty ProcessId",
             ],
             text=True,
             stderr=subprocess.DEVNULL,
         )
-        return any(line.strip().isdigit() for line in out.splitlines())
+        if any(line.strip().isdigit() for line in out.splitlines()):
+            print("[OK] 看门狗已在运行，无需重复启动。")
+            return
     except Exception:
-        return False
+        pass
+    creation = (
+        getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    )
+    stdout = open(LOG_DIR / "watchdog_stdout.log", "a", encoding="utf-8")
+    stderr = open(LOG_DIR / "watchdog_stderr.log", "a", encoding="utf-8")
+    proc = subprocess.Popen(
+        [str(PY), "watchdog.py"],
+        cwd=str(BASE),
+        stdout=stdout,
+        stderr=stderr,
+        creationflags=creation,
+        close_fds=True,
+    )
+    print(f"[OK] 已启动看门狗 (PID {proc.pid})：监控引擎存活与心跳。")
+
+
+def ensure_paper_engine() -> None:
+    """启动器拉起时，纸面引擎也要一起起来。"""
+    try:
+        import watchdog
+
+        if watchdog.engine_processes(paper=True):
+            print("[OK] 纸面引擎已在运行。")
+            return
+        pid = watchdog.start_engine(paper=True)
+        print(f"[OK] 已启动纸面引擎 (PID {pid})：每 2 分钟巡检（扫描 60 个市场/轮）。")
+    except Exception as exc:
+        print(f"[警告] 纸面引擎启动失败: {exc}")
+
 
 def main() -> int:
     os.chdir(BASE)
@@ -80,7 +131,9 @@ def main() -> int:
             print(f"[失败] 无法处理 STOP 文件: {exc}")
             return 1
     if loop_running():
-        print("[OK] 循环已在运行，无需重复启动。")
+        print("[OK] 实盘循环已在运行，无需重复启动。")
+        start_watchdog()
+        ensure_paper_engine()
         print("按任意键关闭…")
         try:
             input()
@@ -119,6 +172,8 @@ def main() -> int:
     if lock_ok or proc.poll() is None:
         print(f"[OK] 已启动无人值守：每 3 分钟巡检 (PID {proc.pid})")
         print(f"日志: {LOG_DIR / 'loop_stdout.log'}")
+        start_watchdog()
+        ensure_paper_engine()
     else:
         print("[失败] 进程未能保持运行，请查看 logs/loop_stderr.log")
         print("按任意键关闭…")

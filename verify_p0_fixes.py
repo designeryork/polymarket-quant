@@ -46,9 +46,12 @@ def section(title: str) -> None:
 def test_signature() -> None:
     section("1. POLY_1271 签名编码修复")
     import clob_executor
+    import proxy_detector
     from web3 import Web3
 
     original = clob_executor.PolymarketV2Executor.resolve_exchange_and_version
+    original_apply_proxy = proxy_detector.apply_to_clob_sdk
+    proxy_detector.apply_to_clob_sdk = lambda: {"ok": True, "detail": "offline signature test"}
     clob_executor.PolymarketV2Executor.resolve_exchange_and_version = (
         lambda self, token_id: (
             Web3.to_checksum_address("0xE111180000d2663C0091e4f400237545B87B996B"),
@@ -56,7 +59,11 @@ def test_signature() -> None:
         )
     )
     try:
-        ex = clob_executor.PolymarketV2Executor()
+        try:
+            ex = clob_executor.PolymarketV2Executor()
+        except RuntimeError as exc:
+            print(f"  [SKIP] 无可用代理通道，跳过签名样本测试：{exc}")
+            return
         token = "92708239841263145361017304203618583258102423804507532186791623602897510452108"
         expected = clob_executor.EXPECTED_SIGNATURE_LENGTH
         lengths = {}
@@ -87,6 +94,7 @@ def test_signature() -> None:
         check('源码中已无 .lstrip("0x")', '.lstrip("0x")' not in src)
     finally:
         clob_executor.PolymarketV2Executor.resolve_exchange_and_version = original
+        proxy_detector.apply_to_clob_sdk = original_apply_proxy
 
 
 # ---------------------------------------------------------------- 2. 单实例锁
@@ -151,6 +159,20 @@ def test_single_instance() -> None:
 
         single_instance.release_lock()
         check("释放锁后文件已删除", not lock_file.exists())
+
+        import quant_engine
+
+        quant_engine._INSTANCE_LOCK_HELD = False
+        check("引擎可获取交易锁", quant_engine.ensure_single_instance())
+        lock_file.unlink()
+        try:
+            quant_engine.ensure_single_instance()
+            lock_loss_stops = False
+        except quant_engine.SingleInstanceLost:
+            lock_loss_stops = True
+        finally:
+            quant_engine._INSTANCE_LOCK_HELD = False
+        check("锁文件丢失或被替换后旧引擎必须停止", lock_loss_stops)
 
         os.environ.pop("ENGINE_LOCK_FILE", None)
 
@@ -357,6 +379,515 @@ def test_reconciled_state_keys() -> None:
     )
 
 
+# ---------------------------------------------------------------- 5b. 止盈止损与策略基准
+def test_exit_strategy() -> None:
+    section("5b. 止盈止损执行与策略基准恢复")
+    import order_ledger
+    import portfolio_reconciliation as pr
+    import quant_engine as qe
+
+    recovered = pr.recover_position_strategy(
+        {"target_prob": 0.92, "z_entry": 0.0, "z_peak": 0.0},
+        0.304412,
+        [{"intent": "ENTRY", "created_at_utc": "2026-01-01", "strategy": {"target_prob": 0.3765}}],
+    )
+    check("对账保留原开仓目标价", recovered["target_prob"] == 0.3765, json.dumps(recovered))
+    check("对账不再伪造 z_peak=0", abs(recovered["z_peak"] - recovered["z_entry"]) < 1e-9)
+
+    historical = pr.recover_position_strategy(
+        {"target_prob": 0.92, "z_entry": 0.0, "z_peak": 0.0}, 0.2, [{"intent": "ENTRY"}]
+    )
+    expected_target = qe.take_profit_price(0.2, qe.exit_config())
+    check("历史缺失目标按真实成本恢复", abs(historical["target_prob"] - expected_target) < 0.0001)
+    check("历史 z_peak 从真实入场 Logit 起步", abs(historical["z_peak"] - qe.to_logit(0.2)) < 0.0001)
+    check("历史缺失 peak_bid 退化为入场价", abs(historical["peak_bid"] - 0.2) < 0.0001)
+
+    migrated = pr.recover_position_strategy(
+        {"exit_rule_version": 2, "target_prob": 0.3671, "z_entry": 0.0, "z_peak": 0.0},
+        0.27,
+        [{"intent": "ENTRY", "strategy": {"target_prob": 0.3671}}],
+    )
+    check(
+        "v2 仓位目标价不被旧开仓目标覆盖",
+        abs(migrated["target_prob"] - qe.take_profit_price(0.27, qe.exit_config())) < 0.0001
+        and migrated["exit_rule_version"] == 2,
+    )
+
+    rows = [{
+        "token_id": "T1", "closed_at": "2026-10-30 17:46:18 UTC",
+        "exit_reason": "CLOB 真实 SELL 成交（移动平均成本对账）", "data_source": "activity",
+    }]
+    pr.attach_engine_exit_reasons(rows, [{
+        "token_id": "T1", "intent": "EXIT", "side": "SELL",
+        "created_at_utc": "2026-10-30T17:45:50+00:00",
+        "notes": "成本硬止损 (Bid 0.12 <= 0.18, 浮亏 -10.00%)",
+    }])
+    check("对账保留引擎平仓原因", rows[0]["exit_reason"].startswith("成本硬止损"))
+
+    stale = [{
+        "token_id": "T1", "closed_at": "2026-10-30 17:46:18 UTC",
+        "exit_reason": "CLOB 真实 SELL 成交（移动平均成本对账）", "data_source": "activity",
+    }]
+    pr.attach_engine_exit_reasons(stale, [{
+        "token_id": "T1", "intent": "EXIT", "side": "SELL",
+        "created_at_utc": "2026-10-30T10:00:00+00:00",
+        "notes": "峰值回撤止盈",
+    }])
+    check("超出时间窗口的订单不误配", stale[0]["exit_reason"].startswith("CLOB 真实 SELL"))
+
+    status_note = [{
+        "token_id": "T1", "closed_at": "2026-10-30 17:46:18 UTC",
+        "exit_reason": "CLOB 真实 SELL 成交（移动平均成本对账）", "data_source": "activity",
+    }]
+    pr.attach_engine_exit_reasons(status_note, [{
+        "token_id": "T1", "intent": "EXIT", "side": "SELL",
+        "created_at_utc": "2026-10-30T17:45:50+00:00",
+        "notes": "已不在 CLOB 挂单列表，状态待持仓对账确认",
+    }])
+    check("状态机文案不会被当成平仓原因", status_note[0]["exit_reason"].startswith("CLOB 真实 SELL"))
+
+    preferred = [{
+        "token_id": "T1", "closed_at": "2026-10-30 17:46:18 UTC",
+        "exit_reason": "CLOB 真实 SELL 成交（移动平均成本对账）", "data_source": "activity",
+    }]
+    pr.attach_engine_exit_reasons(preferred, [{
+        "token_id": "T1", "intent": "EXIT", "side": "SELL",
+        "created_at_utc": "2026-10-30T17:45:50+00:00",
+        "notes": "已不在 CLOB 挂单列表，状态待持仓对账确认",
+        "reason": "成本硬止损 (净浮亏 -10.00%)",
+    }])
+    check("优先使用不被覆盖的 reason 字段", preferred[0]["exit_reason"].startswith("成本硬止损"))
+
+    class FakeData:
+        def __init__(self, bid, ask):
+            self.book = {
+                "best_bid": bid, "best_ask": ask, "spread": ask - bid,
+                "raw_bids": [(bid, 100.0)], "raw_asks": [(ask, 100.0)],
+            }
+
+        def fetch_orderbook(self, token_id):
+            return self.book
+
+        def fetch_resolved_mark(self, token_id, event_id):
+            return None
+
+        def fetch_price_history(self, token_id, fallback_mid, market_info):
+            return [0.2, 0.2]
+
+    class FakeExecutor:
+        def __init__(self, order_id="TP_OLD"):
+            self.order_id = order_id
+            self.cancelled = []
+            self.posted = []
+
+        def find_live_sell_order(self, token_id, refresh=True):
+            if not self.order_id:
+                return None
+            order = order_ledger.get_order(self.order_id) or {}
+            return {
+                "id": self.order_id,
+                "price": order.get("price", 0.4),
+                "original_size": order.get("shares", 5.0),
+            }
+
+        def cancel_order(self, order_id):
+            self.cancelled.append(order_id)
+            return {"success": True}
+
+        def build_and_sign_poly1271_order(self, token_id, side, **kwargs):
+            return {"token_id": token_id, "side": side, **kwargs}
+
+        def post_order(self, payload):
+            self.posted.append(payload)
+            return {"success": True, "orderID": "EXIT_NEW" if payload["price"] < 0.4 else "TP_NEW"}
+
+    original_ledger = order_ledger.LEDGER_FILE
+    original_executor = qe.get_live_executor
+    original_stop = qe.STOP_FILE
+    original_paper = os.environ.get("PAPER")
+    original_live = os.environ.get("ALLOW_LIVE")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            qe.STOP_FILE = Path(tmp) / "NO_STOP"
+            order_ledger.LEDGER_FILE = Path(tmp) / "pending_orders.json"
+            os.environ["PAPER"] = "false"
+            os.environ["ALLOW_LIVE"] = "true"
+
+            def position(bid, peak=None, entry=0.2, shares=5.0, fee=None):
+                cost = round(entry * shares, 6)
+                row = {
+                    "pos_id": "P1", "event_id": "E1", "market_question": "Q", "outcome": "Yes",
+                    "token_id": "T1", "entry_price": entry, "current_bid": bid,
+                    "current_ask": bid + 0.01, "shares": shares, "cost_usdc": cost,
+                    "current_value_usdc": bid * shares, "unrealized_pnl_usdc": bid * shares - cost,
+                    "unrealized_pnl_pct": ((bid * shares - cost) / cost) * 100,
+                    "target_prob": 0.4, "z_peak": qe.to_logit(peak if peak is not None else entry),
+                    "tp_order_id": "TP_OLD", "exit_order_id": None,
+                }
+                if fee is not None:
+                    row["fee_rate"] = fee
+                    row["fee_exponent"] = 1.0
+                return row
+
+            def state_for(pos):
+                return {
+                    "open_positions": [pos], "cash_usdc": 5.0, "initial_capital_usdc": 10.0,
+                    "realized_pnl_usdc": 0.0, "closed_trades": [],
+                }
+
+            order_ledger.record_order("TP_OLD", "T1", "SELL", "TAKE_PROFIT", 0.4, 5.0, 2.0)
+            fake = FakeExecutor()
+            qe.get_live_executor = lambda: fake
+            result = qe.evaluate_existing_positions(state_for(position(0.13)), FakeData(0.13, 0.14))
+            check("ATR 止损先撤销旧止盈单", fake.cancelled == ["TP_OLD"])
+            check("撤单后提交一个平仓卖单", len(fake.posted) == 1 and fake.posted[0]["side"] == "SELL")
+            check("新卖单用途为 EXIT", order_ledger.get_order("EXIT_NEW")["intent"] == "EXIT")
+            check("旧止盈单状态为 CANCELLED", order_ledger.get_order("TP_OLD")["status"] == "CANCELLED")
+            check("信号已触发但持仓等待成交对账", len(result) == 0)
+
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            order_ledger.record_order("TP_OLD", "T1", "SELL", "EXIT", 0.15, 5.0, 0.75)
+            fake = FakeExecutor()
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.14)), FakeData(0.14, 0.15))
+            check("已有平仓单时不撤单也不重复提交", not fake.cancelled and not fake.posted)
+
+            # ===== 平仓单超时未成交 → 撤单按现价重挂 =====
+            # 旧行为：只要链上有 EXIT 单就永久跳过，实测有仓位挂 15 分钟不成交，
+            # 一路跌到 -33% 才成交（设定止损 -10%）。
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            order_ledger.record_order("EXIT_OLD", "T1", "SELL", "EXIT", 0.30, 5.0, 1.5, notes="成本硬止损")
+            ledger_data = json.loads(order_ledger.LEDGER_FILE.read_text(encoding="utf-8"))
+            ledger_data["orders"]["EXIT_OLD"]["created_at_utc"] = "2026-10-31T00:00:00+00:00"
+            order_ledger.LEDGER_FILE.write_text(json.dumps(ledger_data), encoding="utf-8")
+            fake = FakeExecutor(order_id="EXIT_OLD")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.13)), FakeData(0.13, 0.14))
+            check(
+                "平仓单超时未成交会撤单重挂",
+                fake.cancelled == ["EXIT_OLD"] and len(fake.posted) == 1
+                and abs(fake.posted[0]["price"] - 0.13) < 1e-9,
+            )
+
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            first_reg = order_ledger.record_order("EXIT_KEEP", "T1", "SELL", "EXIT", 0.30, 5.0, 1.5)
+            again_reg = order_ledger.record_order("EXIT_KEEP", "T1", "SELL", "EXIT", 0.30, 5.0, 1.5)
+            check(
+                "重复登记不重置 created_at（否则挂单时长永远为 0）",
+                first_reg["created_at_utc"] == again_reg["created_at_utc"],
+            )
+
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            order_ledger.record_order("EXIT_FRESH", "T1", "SELL", "EXIT", 0.30, 5.0, 1.5)
+            fake = FakeExecutor(order_id="EXIT_FRESH")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.13)), FakeData(0.13, 0.14))
+            check("未超时的平仓单保持不动", not fake.cancelled and not fake.posted)
+
+            # ===== 链上查无此单、本地仍阻塞：释放 + 顺延，不抛错 =====
+            # 实测事故：卖单成交后 CLOB 立即移出挂单列表，本地账本仍是 ACCEPTED，
+            # 旧实现直接抛错，导致止损被卡 4.5 分钟。
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            order_ledger.record_order("EXIT_STALE", "T1", "SELL", "EXIT", 0.30, 5.0, 1.5, notes="成本硬止损")
+            order_ledger.record_order("EXIT_OTHER", "T2", "SELL", "EXIT", 0.30, 5.0, 1.5, notes="成本硬止损")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            stale_pos = position(0.13)
+            stale_state = state_for(stale_pos)
+            raised = None
+            try:
+                qe.evaluate_existing_positions(stale_state, FakeData(0.13, 0.14))
+            except Exception as exc:  # noqa: BLE001 - 测试需要捕获任何异常
+                raised = exc
+            check("本地残留卖单不再抛错", raised is None)
+            check("残留记录被释放为 CONFIRMED", order_ledger.get_order("EXIT_STALE")["status"] == "CONFIRMED")
+            check(
+                "只释放目标 token 的单",
+                order_ledger.get_order("EXIT_OTHER")["status"] in ("ACCEPTED", "SUBMITTING"),
+            )
+            check("本轮不重复提交平仓", not fake.posted)
+            check("仓位被标记为顺延待对账", isinstance(stale_pos.get("exit_deferred_at"), (int, float)))
+
+            fake2 = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake2
+            qe.evaluate_existing_positions(state_for(stale_pos), FakeData(0.13, 0.14))
+            check("顺延窗口内不再重复尝试下单", not fake2.cancelled and not fake2.posted)
+
+            # ===== 退出规则 v2：参数边界 =====
+            cfg = qe.exit_config()
+            check("目标价 = 入场 × 3（即 +200%）", qe.take_profit_price(0.2, cfg) == 0.6)
+            check("目标价封顶 0.99", qe.take_profit_price(0.5, cfg) == 0.99)
+            check("硬止损 = 入场 × 0.90", qe.hard_stop_price(0.2, cfg) == 0.18)
+            check("低价位止损距离不低于 2 分钱", qe.hard_stop_price(0.166, cfg) == 0.146)
+            check("无费率时止损位不受影响", qe.hard_stop_price(0.5, cfg) == 0.45)
+            check("7% 费率下止损位前移到净 -10%", abs(qe.hard_stop_price(0.5, cfg, 0.07) - 0.4674) < 0.001)
+            check("低价位仍受 2 分钱下限约束", qe.hard_stop_price(0.166, cfg, 0.07) == 0.146)
+            check("峰值回撤 5 分钱", qe.trailing_exit_price(0.34, 0.2, cfg) == 0.29)
+            check("追踪触发价不深于硬止损", qe.trailing_exit_price(0.22, 0.2, cfg) == 0.18)
+
+            # ===== ATR/Logit 止损：0.20 入场、无 atr_z 时用最小距离 0.45 logit（止损位 ≈ 0.137）=====
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(
+                state_for(position(0.13, fee=0.07)), FakeData(0.13, 0.14)
+            )
+            net_exit = [row for row in order_ledger.blocking_orders() if row.get("intent") == "EXIT"]
+            check(
+                "跌破 ATR 止损位时触发（费率不影响止损距离）",
+                bool(net_exit) and "ATR 止损" in str(net_exit[0].get("notes")),
+            )
+
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(
+                state_for(position(0.19, fee=0.0)), FakeData(0.19, 0.20)
+            )
+            check(
+                "2 分钱回撤不再触发（旧 -10% 止损正是死在这里）",
+                not any(row.get("intent") == "EXIT" for row in order_ledger.blocking_orders()),
+            )
+
+            wide = position(0.12)
+            wide["atr_z"] = 0.30  # 3×0.30=0.90 logit，止损位约 0.092
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(wide), FakeData(0.12, 0.13))
+            check(
+                "ATR_z 大的仓位止损更宽（0.12 不触发）",
+                not any(row.get("intent") == "EXIT" for row in order_ledger.blocking_orders()),
+            )
+
+            # ===== 阴跌但未急杀：旧"单根 K 线"确认门会漏判，v2 必须止损 =====
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            # 0.20 -> 0.13：距入场 -1.21 logit，超过 ATR 止损距离 0.45
+            qe.evaluate_existing_positions(state_for(position(0.13)), FakeData(0.13, 0.14))
+            check("阴跌不再依赖单根 K 线确认", any(row.get("intent") == "EXIT" for row in order_ledger.blocking_orders()))
+
+            # ===== 净口径优先于"2 分钱下限"：0.10 入场跌到 0.085 是净 -15% =====
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.06, entry=0.1)), FakeData(0.06, 0.07))
+            check(
+                "低价仓位跌破 ATR 止损位（0.066）时退出",
+                any(row.get("intent") == "EXIT" for row in order_ledger.blocking_orders()),
+            )
+
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.085, entry=0.1)), FakeData(0.085, 0.095))
+            check(
+                "1.5 分钱回撤不退出（ATR 口径）",
+                not any(row.get("intent") == "EXIT" for row in order_ledger.blocking_orders()),
+            )
+
+            # ===== 轻微浮盈、价差走阔都不应退出 =====
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.21)), FakeData(0.21, 0.22))
+            check("轻微浮盈不触发追踪", not any(row.get("intent") == "EXIT" for row in order_ledger.blocking_orders()))
+
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            fake = FakeExecutor(order_id="")
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.21)), FakeData(0.21, 0.31))
+            check("价差走阔本身不触发退出", not any(row.get("intent") == "EXIT" for row in order_ledger.blocking_orders()))
+
+            # ===== 峰值回撤触发 =====
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            order_ledger.record_order("TP_OLD", "T1", "SELL", "TAKE_PROFIT", 0.4, 5.0, 2.0)
+            fake = FakeExecutor()
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.26, peak=0.34)), FakeData(0.26, 0.27))
+            check("峰值回撤达标后执行追踪止盈", fake.cancelled == ["TP_OLD"] and len(fake.posted) == 1)
+            try:
+                audit_text = qe.SIGNALS_LOG_FILE.read_text(encoding="utf-8")
+            except OSError:
+                audit_text = ""
+            check("追踪退出后记录重入探测", "REENTRY_PROBE" in audit_text)
+            check("重入探测不下单", len(fake.posted) == 1)
+
+            # ===== 存量迁移：旧目标单 0.4 与 v2 目标 0.6 不一致时撤单重挂 =====
+            order_ledger.LEDGER_FILE.write_text(json.dumps({"orders": {}}), encoding="utf-8")
+            order_ledger.record_order("TP_OLD", "T1", "SELL", "TAKE_PROFIT", 0.4, 5.0, 2.0)
+            fake = FakeExecutor()
+            qe.get_live_executor = lambda: fake
+            qe.evaluate_existing_positions(state_for(position(0.21)), FakeData(0.21, 0.22))
+            check(
+                "旧目标单被撤并改挂 v2 目标价",
+                fake.cancelled == ["TP_OLD"] and len(fake.posted) == 1
+                and abs(fake.posted[0]["price"] - 0.6) < 1e-9,
+            )
+
+            # ===== PAPER：命中止损必须真正平仓入账（此前是 continue 之后的死代码）=====
+            os.environ["PAPER"] = "true"
+            paper_state = state_for(position(0.13))
+            qe.evaluate_existing_positions(paper_state, FakeData(0.13, 0.14))
+            check(
+                "纸面模式止损后写入平仓记录",
+                len(paper_state["closed_trades"]) == 1
+                and paper_state["open_positions"] == []
+                and "ATR 止损" in paper_state["closed_trades"][0]["exit_reason"],
+            )
+            os.environ["PAPER"] = "false"
+    finally:
+        order_ledger.LEDGER_FILE = original_ledger
+        qe.get_live_executor = original_executor
+        qe.STOP_FILE = original_stop
+        if original_paper is None:
+            os.environ.pop("PAPER", None)
+        else:
+            os.environ["PAPER"] = original_paper
+        if original_live is None:
+            os.environ.pop("ALLOW_LIVE", None)
+        else:
+            os.environ["ALLOW_LIVE"] = original_live
+
+
+# ---------------------------------------------------------------- 5c. 原文策略一致性
+def test_document_alignment() -> None:
+    section("5c. 原文策略一致性修复")
+    import order_ledger
+    import quant_engine as qe
+    import strategy_validation
+
+    first = order_ledger.make_order_intent("ENTRY", "T1", "cycle-1")
+    repeat = order_ledger.make_order_intent("ENTRY", "T1", "cycle-1")
+    other = order_ledger.make_order_intent("ENTRY", "T1", "cycle-2")
+    check("同一交易意图派生固定 salt", first == repeat and first["salt"] != other["salt"])
+
+    original_ledger = order_ledger.LEDGER_FILE
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            order_ledger.LEDGER_FILE = Path(tmp) / "orders.json"
+            order_ledger.record_order(
+                first["intent_id"], "T1", "BUY", "ENTRY", 0.2, 5, 1,
+                status=order_ledger.STATUS_SUBMITTING, strategy={"salt": first["salt"]},
+            )
+            check("提交前意图已阻塞重复订单", order_ledger.has_open_buy_for_token("T1"))
+            order_ledger.attach_clob_order_id(first["intent_id"], "CLOB-1")
+            check("受理后绑定真实 CLOB ID", order_ledger.get_order("CLOB-1")["status"] == "ACCEPTED")
+            check("意图 ID 不再残留重复记录", order_ledger.get_order(first["intent_id"]) is None)
+    finally:
+        order_ledger.LEDGER_FILE = original_ledger
+
+    execution = qe.estimate_order_execution([(0.20, 2.0), (0.22, 3.0), (0.25, 10.0)], 6.0)
+    check("逐档成交计算加权价格", abs(execution["average_price"] - 1.31 / 6) < 1e-9)
+    check("逐档成交返回满足成交所需限价", execution["limit_price"] == 0.25)
+    partial = qe.estimate_order_execution([(0.20, 2.0), (0.22, 3.0), (0.25, 10.0)], 20.0)
+    check("深度不足时明确返回未成交份额", partial["filled_shares"] == 15 and partial["remaining_shares"] == 5)
+    check("官方 taker fee 公式按 USDC 计算", abs(qe.estimate_taker_fee(100, 0.5, 0.07) - 1.75) < 1e-9)
+    check("零费率市场不产生 taker fee", qe.estimate_taker_fee(100, 0.5, 0) == 0)
+
+    layer = object.__new__(qe.PolymarketDataLayer)
+    layer._request = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("offline missing data"))
+    check("历史数据不足不再合成轨迹", layer.fetch_price_history("T1", 0.3, {}) == [])
+
+    old_whitelist = os.environ.get("MARKET_WHITELIST")
+    old_mode = os.environ.get("MARKET_WHITELIST_MODE")
+    try:
+        os.environ.pop("MARKET_WHITELIST", None)
+        os.environ.pop("MARKET_WHITELIST_MODE", None)
+        check("默认自动扫描生成白名单", qe.RiskEnvelope().whitelist_mode == "AUTO")
+        os.environ["MARKET_WHITELIST_MODE"] = "MANUAL"
+        check("手动空白名单禁止新开仓", qe.RiskEnvelope().market_whitelist == set())
+        os.environ["MARKET_WHITELIST"] = "EVT-1, TOKEN-2"
+        check("白名单配置可读取", qe.RiskEnvelope().market_whitelist == {"EVT-1", "TOKEN-2"})
+    finally:
+        if old_whitelist is None:
+            os.environ.pop("MARKET_WHITELIST", None)
+        else:
+            os.environ["MARKET_WHITELIST"] = old_whitelist
+        if old_mode is None:
+            os.environ.pop("MARKET_WHITELIST_MODE", None)
+        else:
+            os.environ["MARKET_WHITELIST_MODE"] = old_mode
+
+    old_signal = qe.SIGNALS_LOG_FILE
+    old_logs = qe.LOGS_DIR
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            qe.LOGS_DIR = Path(tmp)
+            qe.SIGNALS_LOG_FILE = Path(tmp) / "signals_and_skips.jsonl"
+            qe.SIGNALS_LOG_FILE.write_text('{"test": 1}\n', encoding="utf-8")
+            (Path(tmp) / "trading_errors.jsonl").write_text('{"test": 2}\n', encoding="utf-8")
+            qe.rotate_jsonl_logs()
+            check("审计日志按天轮转", len(list(Path(tmp).glob("*-2*.jsonl"))) == 2)
+    finally:
+        qe.SIGNALS_LOG_FILE = old_signal
+        qe.LOGS_DIR = old_logs
+
+    check("无真实结算样本时禁止校准结论", strategy_validation.calibration_report([])["status"] == "INSUFFICIENT_DATA")
+    samples = [{"p_est": 0.6, "outcome": 1 if i < 18 else 0, "signal_price": 0.5, "execution_price": 0.51} for i in range(30)]
+    check("足够样本可计算 Brier 与校准分桶", strategy_validation.calibration_report(samples)["status"] == "OK")
+    pressure = strategy_validation.cost_pressure_report(samples)
+    check("成本压力包含 1x/2x/8x", [row["slippage_multiplier"] for row in pressure] == [1.0, 2.0, 8.0])
+
+    # 成本压力必须计入往返价差（旧实现用成交滑点，实盘恒为 0，等于没测）
+    wide_spread = [{"p_est": 0.55, "outcome": 1, "signal_price": 0.5, "execution_price": 0.5, "spread": 0.03}] * 30
+    wide_pressure = strategy_validation.cost_pressure_report(wide_spread)
+    check("价差吃掉优势时 1x 就通不过", wide_pressure[0]["edge_pass_count"] == 0)
+
+    tight_spread = [{"p_est": 0.60, "outcome": 1, "signal_price": 0.5, "execution_price": 0.5, "spread": 0.01}] * 30
+    tight_pressure = strategy_validation.cost_pressure_report(tight_spread)
+    check(
+        "价差小则 1x/2x 通过、8x 掉出",
+        tight_pressure[0]["edge_pass_count"] == 30
+        and tight_pressure[1]["edge_pass_count"] == 30
+        and tight_pressure[2]["edge_pass_count"] == 0,
+    )
+
+    paper_pos = {
+        "shares": 5.0, "cost_usdc": 1.0, "entry_price": 0.2,
+        "paper_remaining_shares": 5.0, "paper_limit_price": 0.2, "paper_order_id": "P1",
+    }
+    qe.fill_paper_order(paper_pos, {
+        "best_ask": 0.22, "best_bid": 0.21,
+        "raw_asks": [(0.22, 10.0)], "raw_bids": [(0.21, 10.0)],
+    })
+    check("限价不满足时 PAPER 挂单不成交", paper_pos["paper_remaining_shares"] == 5.0)
+    qe.fill_paper_order(paper_pos, {
+        "best_ask": 0.19, "best_bid": 0.18,
+        "raw_asks": [(0.19, 10.0)], "raw_bids": [(0.18, 10.0)],
+    })
+    check("限价满足后 PAPER 剩余份额继续成交", paper_pos["shares"] == 10.0 and paper_pos["paper_remaining_shares"] == 0)
+
+    from public_trade_research import normalize_public_trades
+    public_rows = [
+        {"transactionHash": "0x1", "asset": "T1", "side": "BUY", "price": 0.4, "size": 2, "timestamp": 10},
+        {"transactionHash": "0x1", "asset": "T1", "side": "BUY", "price": 0.4, "size": 3, "timestamp": 10},
+        {"transactionHash": "0x1", "asset": "T1", "side": "SELL", "price": 0.4, "size": 1, "timestamp": 11},
+        {"transactionHash": "0x2", "asset": "T2", "side": "BUY", "price": 0.5, "size": 1, "timestamp": 100},
+    ]
+    normalized = normalize_public_trades(public_rows, end_timestamp=50)
+    check("公开成交部分成交合并与对冲识别", normalized["stats"]["grouped_count"] == 2 and normalized["stats"]["hedge_count"] == 1)
+    check("结算后公开成交被剔除", normalized["stats"]["discarded_after_settlement"] == 1)
+
+    missing = strategy_validation.feature_missing_report([{"clobTokenIds": "T"}, {}])
+    check("特征缺失率按真实字段统计", missing["fields"]["description"]["missing"] == 2)
+    check("基线回测有真实样本门槛", strategy_validation.baseline_report(samples)["status"] == "OK")
+    check("时间外样本不足时明确拒绝结论", strategy_validation.out_of_sample_report(samples)["status"] == "INSUFFICIENT_DATA")
+    quality = strategy_validation.execution_quality_report([{"signal_price": 0.5, "realized_slippage": 0.01, "edge_at_entry": 0.04}])
+    check("实现 edge 与实际滑点可汇总", quality["sample_count"] == 1 and quality["mean_realized_slippage"] == 0.01)
+
+    import watchdog
+    old_stop = watchdog.STOP_FILE
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            watchdog.STOP_FILE = Path(tmp) / "STOP"
+            watchdog.STOP_FILE.touch()
+            check("看门狗尊重用户 STOP", watchdog.check_once()["action"] == "STOPPED_BY_USER")
+    finally:
+        watchdog.STOP_FILE = old_stop
+
+
 # ---------------------------------------------------------------- 6. 错误分类
 def test_error_taxonomy() -> None:
     section("6. 错误分类（网络类 vs 交易类）")
@@ -383,9 +914,18 @@ def test_error_taxonomy() -> None:
             wrong.append(f"{text[:40]} -> {got} (期望 {expected})")
     check("12 类错误分类全部正确", not wrong, "; ".join(wrong[:3]) if wrong else f"共 {len(cases)} 类")
 
-    from trading_error_monitor import NETWORK_CATEGORIES, CATEGORIES
+    from trading_error_monitor import NETWORK_CATEGORIES, CATEGORIES, runtime_metadata
     missing = [c for c in NETWORK_CATEGORIES if c not in CATEGORIES]
     check("网络类分类均有处置建议", not missing, f"缺失: {missing}")
+    metadata = runtime_metadata()
+    check(
+        "告警包含 PID、代码版本和通道字段",
+        metadata.get("pid") == os.getpid()
+        and bool(metadata.get("code_version"))
+        and "proxy_url" in metadata
+        and "proxy_source" in metadata,
+        f"PID={metadata.get('pid')} version={metadata.get('code_version')}",
+    )
 
 
 # ---------------------------------------------------------------- 7. 账本隔离
@@ -435,10 +975,25 @@ def test_proxy_detector() -> None:
         f"proxy={info.get('proxy_url')} source={info.get('source')}",
     )
     check(
-        "探测到可用通道",
-        bool(info.get("proxy_url")) or info.get("source") == "直连(未使用代理)",
+        "探测到可用代理通道",
+        bool(info.get("proxy_url")),
         f"{info.get('source')} 延迟 {info.get('latency_s')}s",
     )
+
+    original_candidates = proxy_detector.candidate_proxies
+    try:
+        proxy_detector.candidate_proxies = lambda: []
+        empty_detector = proxy_detector.ProxyDetector()
+        empty_info = empty_detector.detect(force=True)
+        check("无代理时探测结果明确失败", empty_info.get("proxy_url") is None)
+        try:
+            empty_detector.session()
+            direct_blocked = False
+        except RuntimeError:
+            direct_blocked = True
+        check("无代理时禁止建立直连会话", direct_blocked)
+    finally:
+        proxy_detector.candidate_proxies = original_candidates
 
     applied = proxy_detector.apply_to_clob_sdk()
     check(
@@ -462,21 +1017,47 @@ def test_scan_coverage() -> None:
     section("9. 扫描覆盖能力")
     import quant_engine
 
-    # 扫描窗口必须支持 offset 轮转
     source = (BASE / "quant_engine.py").read_text(encoding="utf-8")
     check("fetch_active_markets 支持 offset 参数", "def fetch_active_markets(self, limit" in source and "offset" in source)
-
-    # 扫描窗口配置项存在且有合理默认值
-    check("SCAN_LIMIT 配置存在", "SCAN_LIMIT" in source, "默认 60（Gamma 单次上限 100）")
-    check("SCAN_OFFSET_ROTATION 配置存在", "SCAN_OFFSET_ROTATION" in source, "默认 20，轮转步长")
-
-    # 轮转状态可持久化（独立文件，不放进会被对账器重建的 portfolio.json）
-    check(
-        "轮转状态使用独立文件",
-        quant_engine.SCAN_ROTATION_FILE.name == "scan_rotation.json",
-        str(quant_engine.SCAN_ROTATION_FILE.name),
-    )
+    check("SCAN_LIMIT 配置存在", "SCAN_LIMIT" in source, "默认 60（单轮评估上限 100）")
+    check("轮转状态使用独立文件", quant_engine.SCAN_ROTATION_FILE.name == "scan_rotation.json")
     check("轮转状态文件在 state/ 目录", quant_engine.SCAN_ROTATION_FILE.parent.name == "state")
+    check("市场宇宙有独立完整快照", quant_engine.MARKET_UNIVERSE_FILE.name == "market_universe.json")
+
+    layer = object.__new__(quant_engine.PolymarketDataLayer)
+    calls = []
+    def fake_page(limit, offset, strict=False):
+        calls.append(offset)
+        count = 100 if offset == 0 else 25 if offset == 100 else 0
+        layer._last_market_page_size = count
+        return [{"conditionId": f"0x{i}", "question": f"M{i}"} for i in range(offset, offset + count)]
+    layer.fetch_active_markets = fake_page
+    original_universe = quant_engine.MARKET_UNIVERSE_FILE
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            quant_engine.MARKET_UNIVERSE_FILE = Path(tmp) / "market_universe.json"
+            universe = layer.fetch_market_universe()
+            check("完整分页拉取整个市场宇宙", len(universe) == 125 and calls == [0, 100])
+            check("每日市场宇宙快照已保存", len(list(Path(tmp).glob("market_universe_*.json"))) == 1)
+            calls.clear()
+            layer.fetch_market_universe()
+            check("新鲜快照不重复请求全站", calls == [])
+
+            import requests
+            limited = object.__new__(quant_engine.PolymarketDataLayer)
+            def gamma_limit(limit, offset, strict=False):
+                if offset >= 2100:
+                    response = requests.Response()
+                    response.status_code = 422
+                    raise requests.exceptions.HTTPError(response=response)
+                limited._last_market_page_size = 100
+                return [{"conditionId": f"0x{i}"} for i in range(offset, offset + 100)]
+            limited.fetch_active_markets = gamma_limit
+            quant_engine.MARKET_UNIVERSE_FILE = Path(tmp) / "market_universe_limit.json"
+            limited_universe = limited.fetch_market_universe()
+            check("Gamma 分页上限作为全量结束而非报错", len(limited_universe) == 2100)
+    finally:
+        quant_engine.MARKET_UNIVERSE_FILE = original_universe
 
     # 已结束市场过滤
     check(
@@ -596,7 +1177,11 @@ def test_order_amount_minimum() -> None:
         )
     )
     try:
-        ex = clob_executor.PolymarketV2Executor()
+        try:
+            ex = clob_executor.PolymarketV2Executor()
+        except RuntimeError as exc:
+            print(f"  [SKIP] 无可用代理通道，跳过订单金额测试：{exc}")
+            return
         token = "92708239841263145361017304203618583258102423804507532186791623602897510452108"
         bad = []
         for ask in prices:
@@ -881,6 +1466,21 @@ def test_chain_order_authority() -> None:
         breaker._state[token]["next_retry_at"] = 0  # 模拟冷却到期
         check("冷却到期后允许重试", breaker.has_balance_conflict(token) is False)
 
+        # 余额冲突必须是固定短冷却，不能指数退避到小时级（否则止损会被冻住）
+        breaker.record_balance_conflict("BAL_TOKEN_2", "not enough balance")
+        fixed = breaker._state["BAL_TOKEN_2"]["cooldown_seconds"]
+        check("余额冲突冷却为固定 60 秒", 55 <= fixed <= 65)
+        old_cd = os.environ.get("BALANCE_CONFLICT_COOLDOWN")
+        try:
+            os.environ["BALANCE_CONFLICT_COOLDOWN"] = "5"
+            breaker.record_balance_conflict("BAL_TOKEN_3", "not enough balance")
+            check("冷却秒数可由环境变量覆盖", breaker._state["BAL_TOKEN_3"]["cooldown_seconds"] == 5.0)
+        finally:
+            if old_cd is None:
+                os.environ.pop("BALANCE_CONFLICT_COOLDOWN", None)
+            else:
+                os.environ["BALANCE_CONFLICT_COOLDOWN"] = old_cd
+
 
 # ---------------------------------------------------------------- 16. 仓库卫生
 def test_repo_hygiene() -> None:
@@ -914,10 +1514,418 @@ def test_repo_hygiene() -> None:
     check("明文钱包目录已移出项目", not wallet_in_project)
 
 
+def test_entry_side_fallback() -> None:
+    section("5d. 入场方向评估（另一侧按需补评）")
+    import quant_engine as qe
+
+    class FakeLayer:
+        def __init__(self, prices):
+            self.prices = prices
+
+        def fetch_price_history(self, *args, **kwargs):
+            return self.prices
+
+    def book(ask, spread=0.01, depth=100.0, imb=0.0):
+        return {
+            "best_ask": ask, "best_bid": round(ask - spread, 4), "mid": round(ask - spread / 2, 4),
+            "spread": spread, "ask_depth_usdc": depth, "bid_depth_usdc": depth,
+            "imbalance": imb, "raw_asks": [(ask, 10.0)], "raw_bids": [(ask - spread, 10.0)],
+        }
+
+    def series(start, end, n=60):
+        return [round(start + (end - start) * i / (n - 1), 4) for i in range(n)]
+
+    skips = []
+
+    def record_skip(question, code, detail, metrics=None):
+        skips.append(code)
+
+    up = qe.evaluate_entry_side(
+        "Q", "Yes", "T1", book(0.45, imb=0.9), {}, FakeLayer(series(0.20, 0.80)), record_skip
+    )
+    check("上涨方向可入场", up["status"] == "ACCEPT" and up["edge"] >= 0.025)
+
+    down = qe.evaluate_entry_side(
+        "Q", "Yes", "T1", book(0.45), {}, FakeLayer(series(0.80, 0.20)), record_skip
+    )
+    check(
+        "下跌方向返回 REJECT_SIDE 且 ROC_z<0（这正是补评另一侧的条件）",
+        down["status"] == "REJECT_SIDE" and down["roc_z"] < 0,
+    )
+
+    wide = qe.evaluate_entry_side(
+        "Q", "Yes", "T1", book(0.45, spread=0.10), {}, FakeLayer(series(0.20, 0.80)), record_skip
+    )
+    check("价差过大判为市场级拒绝", wide["status"] == "REJECT_MARKET" and "WIDE_SPREAD" in skips)
+
+    thin = qe.evaluate_entry_side(
+        "Q", "Yes", "T1", book(0.45, depth=5.0), {}, FakeLayer(series(0.20, 0.80)), record_skip
+    )
+    check("深度不足判为市场级拒绝", thin["status"] == "REJECT_MARKET" and "LOW_DEPTH" in skips)
+
+    # edge 必须覆盖往返价差（用大倍数门槛验证判定分支，避免依赖具体价位）
+    old_over = os.environ.get("MIN_EDGE_OVER_SPREAD")
+    try:
+        os.environ["MIN_EDGE_OVER_SPREAD"] = "5"
+        cost_reject = qe.evaluate_entry_side(
+            "Q", "Yes", "T1", book(0.45, spread=0.02, imb=0.9), {}, FakeLayer(series(0.20, 0.80)), record_skip
+        )
+        check(
+            "edge 未覆盖往返价差时拒绝",
+            cost_reject["status"] == "REJECT_SIDE" and cost_reject["reject_reason"] == "spread",
+        )
+    finally:
+        if old_over is None:
+            os.environ.pop("MIN_EDGE_OVER_SPREAD", None)
+        else:
+            os.environ["MIN_EDGE_OVER_SPREAD"] = old_over
+
+    # 开仓总开关
+    old_flag = os.environ.get("ALLOW_NEW_ENTRIES")
+    try:
+        os.environ["ALLOW_NEW_ENTRIES"] = "false"
+        check("开仓开关可关闭", qe.allow_new_entries() is False)
+        os.environ["ALLOW_NEW_ENTRIES"] = "true"
+        check("开仓开关可开启", qe.allow_new_entries() is True)
+    finally:
+        if old_flag is None:
+            os.environ.pop("ALLOW_NEW_ENTRIES", None)
+        else:
+            os.environ["ALLOW_NEW_ENTRIES"] = old_flag
+
+
+def test_price_history_cache() -> None:
+    section("5g. 价格历史缓存（减少 Data API 请求）")
+    import quant_engine as qe
+
+    qe._PRICE_HISTORY_CACHE.clear()
+    qe._PRICE_HISTORY_CACHE_STATS.update({"hit": 0, "miss": 0})
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"history": [{"p": 0.30 + i * 0.001} for i in range(20)]}
+
+    layer = object.__new__(qe.PolymarketDataLayer)
+    calls = {"n": 0}
+
+    def fake_request(*args, **kwargs):
+        calls["n"] += 1
+        return FakeResponse()
+
+    layer._request = fake_request
+    first = layer.fetch_price_history("TOKEN_A", 0.3, {})
+    second = layer.fetch_price_history("TOKEN_A", 0.3, {})
+    check(
+        "同一 token 的历史只请求一次",
+        len(first) == 20 and second == first and calls["n"] == 1,
+    )
+    check("缓存命中计数", qe.price_history_cache_stats()["hit"] == 1)
+
+    third = layer.fetch_price_history("TOKEN_B", 0.3, {})
+    check("不同 token 不共用缓存", len(third) == 20 and calls["n"] == 2)
+
+    old = os.environ.get("PRICE_HISTORY_CACHE_SECONDS")
+    try:
+        os.environ["PRICE_HISTORY_CACHE_SECONDS"] = "0"
+        layer.fetch_price_history("TOKEN_A", 0.3, {})
+        check("TTL 设为 0 时缓存立即失效", calls["n"] == 3)
+    finally:
+        if old is None:
+            os.environ.pop("PRICE_HISTORY_CACHE_SECONDS", None)
+        else:
+            os.environ["PRICE_HISTORY_CACHE_SECONDS"] = old
+    qe._PRICE_HISTORY_CACHE.clear()
+
+
+def test_mode_files() -> None:
+    section("5f. 实盘 / 纸面文件隔离")
+    import quant_engine as qe
+
+    old = os.environ.get("PAPER")
+    try:
+        os.environ["PAPER"] = "false"
+        live_names = (qe.heartbeat_file().name, qe.dashboard_file().name, qe.equity_history_file().name)
+        live_portfolio = qe.portfolio_path().name
+        os.environ["PAPER"] = "true"
+        paper_names = (qe.heartbeat_file().name, qe.dashboard_file().name, qe.equity_history_file().name)
+        paper_portfolio = qe.portfolio_path().name
+        check("心跳文件按模式隔离", live_names[0] == "heartbeat.json" and paper_names[0] == "heartbeat_paper.json")
+        check("面板文件按模式隔离", live_names[1] == "dashboard.html" and paper_names[1] == "dashboard_paper.html")
+        check("净值历史按模式隔离", live_names[2] != paper_names[2])
+        check("账本文件按模式隔离", live_portfolio == "portfolio.json" and paper_portfolio == "portfolio_paper.json")
+    finally:
+        if old is None:
+            os.environ.pop("PAPER", None)
+        else:
+            os.environ["PAPER"] = old
+
+
+def test_evaluation_sampling() -> None:
+    section("5g. 评估即记录（校准数据源）")
+    import quant_engine as qe
+    import strategy_validation as sv
+
+    old_log = qe.RESEARCH_LOG_FILE
+    old_dedupe = dict(qe._EVAL_DEDUPE)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "samples.jsonl"
+            qe.RESEARCH_LOG_FILE = log
+            qe._EVAL_DEDUPE.clear()
+
+            def record(label="Yes"):
+                qe.record_evaluation_sample(
+                    "Q", "T1", label, {"conditionId": "C1"}, 0.42, 0.35,
+                    {"spread": 0.02, "roc_logit_6": 0.05, "imbalance": 0.2}, "accept",
+                )
+
+            record("Yes")
+            record("Yes")
+            record("No")
+            lines = [json.loads(row) for row in log.read_text(encoding="utf-8").splitlines() if row.strip()]
+            check("同一 token/方向/小时只记一次", len(lines) == 2)
+            check("评估样本带 gate_result", all(row.get("gate_result") == "accept" for row in lines))
+
+            log.write_text(
+                chr(10).join([
+                    json.dumps({
+                        "record_type": "EVAL", "token_id": "T9", "outcome_label": "Yes", "p_est": 0.6,
+                        "signal_price": 0.5, "execution_price": 0.5,
+                        "metrics": {"spread": 0.02, "roc_logit_6": 0.04, "imbalance": 0.3},
+                        "ts_utc": "2026-10-31T10:00:00+00:00",
+                    }),
+                    json.dumps({
+                        "record_type": "RESOLUTION", "token_id": "T9", "outcome": 1,
+                        "ts_utc": "2026-11-01T00:00:00+00:00",
+                    }),
+                ]) + chr(10),
+                encoding="utf-8",
+            )
+            samples = sv.load_samples(log)
+            check("EVAL 也能进入校准样本", len(samples) == 1 and samples[0]["outcome"] == 1)
+            check("EVAL 的盘口指标被带入", abs(samples[0]["spread"] - 0.02) < 1e-9)
+    finally:
+        qe.RESEARCH_LOG_FILE = old_log
+        qe._EVAL_DEDUPE.clear()
+        qe._EVAL_DEDUPE.update(old_dedupe)
+
+
+def test_proxy_negative_cache() -> None:
+    section("17. 代理负缓存自愈")
+    import proxy_detector as pd
+
+    calls = {"n": 0}
+    old_probe = pd._probe_url
+    old_candidates = pd.candidate_proxies
+    try:
+        pd.candidate_proxies = lambda: [{"url": "http://127.0.0.1:7890", "source": "test"}]
+
+        def failing_probe(url, timeout=8.0):
+            calls["n"] += 1
+            return False, "fail", 0.01
+
+        pd._probe_url = failing_probe
+        det = pd.ProxyDetector()
+        det.detect(force=True)
+        check("探测失败进入 fail-closed", det.selected_url is None)
+        first = calls["n"]
+        det.detect()
+        check("负缓存期内不重复探测", calls["n"] == first)
+        det.checked_at = "2020-01-01T00:00:00+00:00"
+        det.detect()
+        check("负缓存过期后自动重探", calls["n"] > first)
+    finally:
+        pd._probe_url = old_probe
+        pd.candidate_proxies = old_candidates
+
+
+def test_balance_degrade() -> None:
+    section("18. 余额读取降级（RPC 抖动不阻塞止损）")
+    import requests as _requests
+    import portfolio_reconciliation as pr
+
+    old = (pr.fetch_paginated, pr.read_open_orders, pr.read_pusd_balances, pr.build_session)
+    try:
+        pr.build_session = lambda: _requests.Session()
+        pr.fetch_paginated = lambda session, endpoint, wallet: []
+        pr.read_open_orders = lambda: []
+
+        def boom(eoa, deposit_wallet):
+            raise RuntimeError("rpc down")
+
+        pr.read_pusd_balances = boom
+        sources = pr.fetch_sources({"cash_usdc": 12.34, "eoa_idle_pusd": 0.5})
+        check("RPC 失败时沿用上次现金", abs(sources["balances"]["deposit_wallet"] - 12.34) < 1e-9)
+        check("余额来源标记为 stale", str(sources["balances_source"]).startswith("stale"))
+
+        pr.read_pusd_balances = lambda eoa, deposit_wallet: {"eoa": 0.0, "deposit_wallet": 9.9}
+        live_sources = pr.fetch_sources({"cash_usdc": 12.34})
+        check(
+            "RPC 正常时使用真实余额",
+            live_sources["balances"]["deposit_wallet"] == 9.9 and live_sources["balances_source"] == "rpc",
+        )
+
+        pr.read_pusd_balances = boom
+        raised = False
+        try:
+            pr.fetch_sources(None)
+        except RuntimeError:
+            raised = True
+        check("无历史快照时仍 fail-closed", raised)
+    finally:
+        pr.fetch_paginated, pr.read_open_orders, pr.read_pusd_balances, pr.build_session = old
+
+
+def test_hedge_ledger() -> None:
+    section("19. 对冲纸盘跟随")
+    import hedge_ledger as hl
+
+    old = hl.HEDGE_FILE
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            hl.HEDGE_FILE = Path(tmp) / "portfolio_hedge.json"
+            state = hl.initialise_if_missing()
+            check("对冲账本初始资金 $12.81", state["initial_capital_usdc"] == 12.81 and state["cash_usdc"] == 12.81)
+
+            paper = {
+                "pos_id": "POS-1", "event_id": "E1", "market_question": "Q?", "outcome": "Yes",
+                "shares": 5.0, "entry_price": 0.33, "fee_rate": 0.0, "fee_exponent": 1.0,
+            }
+            position = hl.mirror_open(paper, "TOK_NO", "No", {"best_ask": 0.67, "best_bid": 0.66})
+            check(
+                "按反方向、同份额开仓",
+                position["outcome"] == "No" and position["shares"] == 5.0
+                and abs(hl.load_state()["cash_usdc"] - 9.46) < 1e-6,
+            )
+            check("重复镜像幂等", hl.mirror_open(paper, "TOK_NO", "No", {"best_ask": 0.67}) is None)
+
+            class Layer:
+                def __init__(self, book):
+                    self.book = book
+
+                def fetch_orderbook(self, token):
+                    return self.book
+
+            placed = hl.close_for_paper(paper, {"best_bid": 0.68, "best_ask": 0.72})
+            check("跟随平仓先挂卖单（不主动吃买一）", placed is None and hl.find_for_paper("POS-1")["exit_order"]["limit_price"] == 0.72)
+            held_state = hl.mark_all(Layer({"best_bid": 0.70, "best_ask": 0.72}))
+            check("卖单未成交时继续持有并盯市", len(held_state["open_positions"]) == 1)
+            filled_state = hl.mark_all(Layer({"best_bid": 0.72, "best_ask": 0.76}))
+            check(
+                "买一追到卖单价后成交入账",
+                not filled_state["open_positions"]
+                and abs(filled_state["realized_pnl_usdc"] - 0.25) < 1e-6
+                and abs(filled_state["cash_usdc"] - 13.06) < 1e-6,
+            )
+
+            cash_low = hl.load_state()
+            cash_low["cash_usdc"] = 1.0
+            hl.save_state(cash_low)
+            paper2 = dict(paper, pos_id="POS-2")
+            partial = hl.mirror_open(paper2, "TOK_NO", "No", {"best_ask": 0.67})
+            check("现金不足按可用资金缩量", abs(partial["shares"] - 1.4925) < 1e-3)
+            check(
+                "缩量被记录到 partial_mirrors",
+                len(hl.load_state()["partial_mirrors"]) == 1,
+            )
+    finally:
+        hl.HEDGE_FILE = old
+
+
+def test_reverse_ledgers() -> None:
+    section("20. 反向跟单（持有到结算 / 买一挂单）")
+    import reverse_ledger as rl
+
+    class Layer:
+        def __init__(self, book=None, resolved=None):
+            self.book = book
+            self.resolved = resolved
+
+        def fetch_orderbook(self, token):
+            return self.book
+
+        def fetch_resolved_mark(self, token, event_id):
+            if self.resolved is None:
+                return None
+            return {"best_bid": self.resolved, "mark_source": "RESOLVED"}
+
+    old = dict(rl.FILES)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            rl.FILES = {"reverse": Path(tmp) / "reverse.json", "maker": Path(tmp) / "maker.json"}
+            rl.initialise_all()
+            paper = {
+                "pos_id": "POS-1", "event_id": "E1", "market_question": "Q?", "outcome": "Yes",
+                "shares": 5.0, "entry_price": 0.35,
+            }
+            book = {"best_ask": 0.67, "best_bid": 0.64}
+
+            position = rl.mirror_open("reverse", paper, "TOK_NO", "No", book, 0.04, 1.0)
+            check("反向持有按卖一买入", position["entry_price"] == 0.67 and position["shares"] == 5.0)
+
+            settled = rl.tick("reverse", Layer(resolved=1.0))
+            check(
+                "反向持有拿到结算并入账",
+                not settled["open_positions"] and settled["realized_pnl_usdc"] > 1.5,
+            )
+
+            # 旧规则（买一挂单等成交）会让反向盘在纸面下跌时永远不成交，已改为开仓即按卖一成交。
+            maker_pos = rl.mirror_open("maker", paper, "TOK_NO", "No", book, 0.04, 1.0)
+            check(
+                "反向跟单开仓即按卖一成交（保证每笔纸面仓位都有反向仓）",
+                maker_pos["entry_price"] == 0.67
+                and maker_pos["shares"] == 5.0
+                and maker_pos["pending_shares"] == 0.0,
+            )
+            held = rl.tick("maker", Layer(book={"best_ask": 0.66, "best_bid": 0.63}))
+            check("反向跟单持仓随盘口盯市", held["open_positions"][0]["shares"] == 5.0)
+
+            closed = rl.close_for_paper("maker", paper, {"best_bid": 0.66, "best_ask": 0.70})
+            check(
+                "反向跟单平仓先挂卖单（赚回出场价差）",
+                closed is None and rl.find_for_paper("maker", "POS-1")["exit_order"]["limit_price"] == 0.70,
+            )
+            sold = rl.tick("maker", Layer(book={"best_ask": 0.70, "best_bid": 0.70}))
+            check(
+                "卖单被买盘吃后入账（卖一进、卖一出，只亏手续费）",
+                not sold["open_positions"] and -0.02 < sold["realized_pnl_usdc"] < 0.12,
+            )
+
+            # 旧版遗留 pending：没有 fill_mode，下一轮必须按卖一补成交，不能让反向盘缺席
+            legacy_state = rl.load_state("maker")
+            legacy_pos = rl._new_position(
+                "maker", {"pos_id": "POS-2"}, "TOK_NO", "No", 0.0, 0.64, 0.04, 1.0
+            )
+            legacy_pos["pending_shares"] = 2.0
+            legacy_pos["limit_price"] = 0.64
+            legacy_state["open_positions"].append(legacy_pos)
+            rl.save_state("maker", legacy_state)
+            chased = rl.tick("maker", Layer(book={"best_ask": 0.65, "best_bid": 0.63}))
+            lp = next(p for p in chased["open_positions"] if p["paper_pos_id"] == "POS-2")
+            check(
+                "旧版遗留挂单按卖一补成交",
+                lp["shares"] == 2.0
+                and 0.65 <= lp["entry_price"] < 0.67
+                and lp["fill_mode"] == "chase_at_ask",
+            )
+    finally:
+        rl.FILES = old
+
+
 def main() -> int:
     print("=" * 70)
     print(" P0 修复验证套件（离线，不发起任何交易调用）")
     print("=" * 70)
+
+    # 测试会调用 evaluate_existing_positions，其审计写入会污染实盘日志。
+    # 实测这些假事件（如"成本硬止损 Bid 0.14"）会被误当成真实平仓记录，
+    # 因此把审计输出重定向到临时目录，保证 logs/signals_and_skips.jsonl 只记真实交易。
+    import quant_engine as qe
+    _test_tmp = Path(tempfile.mkdtemp())
+    qe.SIGNALS_LOG_FILE = _test_tmp / "signals_test.jsonl"
+    qe.RESEARCH_LOG_FILE = _test_tmp / "samples_test.jsonl"
 
     test_signature()
     test_single_instance()
@@ -925,6 +1933,16 @@ def main() -> int:
     test_order_ledger()
     test_exposure_gate()
     test_reconciled_state_keys()
+    test_exit_strategy()
+    test_entry_side_fallback()
+    test_price_history_cache()
+    test_mode_files()
+    test_evaluation_sampling()
+    test_proxy_negative_cache()
+    test_balance_degrade()
+    test_hedge_ledger()
+    test_reverse_ledgers()
+    test_document_alignment()
     test_error_taxonomy()
     test_ledger_separation()
     test_proxy_detector()

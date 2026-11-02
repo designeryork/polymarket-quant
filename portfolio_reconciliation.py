@@ -6,7 +6,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -97,7 +97,7 @@ def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> Li
                 new_session.headers.update({"User-Agent": "PolymarketPortfolioReconciliation/1.0"})
                 print(
                     f"[网络自愈] 原通道异常({type(exc).__name__})，"
-                    f"重新探测到 {info.get('proxy_url') or '直连'}，重试本请求"
+                    f"重新探测到 {info.get('proxy_url') or '无可用代理'}，重试本请求"
                 )
                 response = rate_limiter.request_with_retry(
                     new_session, "GET", url, params=params,
@@ -121,24 +121,59 @@ def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> Li
     raise ValueError(f"Too many {endpoint} rows; refusing an incomplete reconciliation")
 
 
+def _make_web3(rpc: str, proxy_url: Optional[str]) -> Web3:
+    """构建显式指定代理（或显式直连）的 Web3 实例。
+
+    不使用环境变量里的代理：trust_env=False，避免被无关进程注入的
+    HTTP_PROXY 带到别的通道上。
+    """
+    session = requests.Session()
+    session.trust_env = False
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
+    return Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 8}, session=session))
+
+
 def read_pusd_balances(eoa: str, deposit_wallet: str) -> Dict[str, float]:
+    """读取 pUSD 余额。
+
+    先走检测到的代理通道，再给 **RPC 单独一次直连机会**：
+    data-api 在国内必须走代理（直连实测 12s 超时），但 RPC 域名通常不受地域限制——
+    实测 publicnode 直连 200、经代理反而超时。切换代理节点后正是这种情况。
+    """
     errors = []
-    rpcs = [
+    rpcs = list(dict.fromkeys(x for x in [
         os.getenv("POLYGON_RPC", ""),
         "https://polygon-bor-rpc.publicnode.com",
         "https://polygon.drpc.org",
         "https://1rpc.io/matic",
-    ]
-    for rpc in dict.fromkeys(x for x in rpcs if x):
-        try:
-            w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 15}))
-            contract = w3.eth.contract(address=PUSD_ADDRESS, abi=ERC20_BALANCE_ABI)
-            return {
-                "eoa": contract.functions.balanceOf(Web3.to_checksum_address(eoa)).call() / 1e6,
-                "deposit_wallet": contract.functions.balanceOf(Web3.to_checksum_address(deposit_wallet)).call() / 1e6,
-            }
-        except Exception as exc:
-            errors.append(f"{rpc}: {type(exc).__name__}")
+    ] if x))
+    proxy_url = None
+    try:
+        import proxy_detector
+
+        proxy_url = proxy_detector.get_detector().selected_url
+    except Exception:
+        proxy_url = None
+    routes = []
+    if proxy_url:
+        routes.append(("代理", proxy_url))
+    routes.append(("直连", None))
+    for mode, proxy in routes:
+        for rpc in rpcs:
+            host = rpc.split("/")[2] if "://" in rpc else rpc
+            try:
+                w3 = _make_web3(rpc, proxy)
+                contract = w3.eth.contract(address=PUSD_ADDRESS, abi=ERC20_BALANCE_ABI)
+                balances = {
+                    "eoa": contract.functions.balanceOf(Web3.to_checksum_address(eoa)).call() / 1e6,
+                    "deposit_wallet": contract.functions.balanceOf(Web3.to_checksum_address(deposit_wallet)).call() / 1e6,
+                }
+                # 记录走的是代理还是直连：不同代理节点对 RPC 域名的态度不同，排查时要用
+                print(f"[余额通道] 经{mode}读取成功（{host}）", flush=True)
+                return balances
+            except Exception as exc:
+                errors.append(f"{mode}/{host}: {type(exc).__name__}")
     raise RuntimeError(f"Unable to read pUSD balances: {', '.join(errors)}")
 
 
@@ -160,13 +195,28 @@ def read_open_orders() -> List[Dict[str, Any]]:
     raise RuntimeError("Unreachable open-order retry state")
 
 
-def fetch_sources() -> Dict[str, Any]:
+def fetch_sources(previous: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     eoa = Web3.to_checksum_address(os.environ["WALLET_ADDRESS"])
     deposit_wallet = Web3.to_checksum_address(os.environ["DEPOSIT_WALLET"])
     session = build_session()
     activity = fetch_paginated(session, "activity", deposit_wallet)
     positions = fetch_paginated(session, "positions", deposit_wallet)
-    balances = read_pusd_balances(eoa, deposit_wallet)
+    try:
+        balances = read_pusd_balances(eoa, deposit_wallet)
+        balances_source = "rpc"
+    except Exception as exc:
+        # 余额读不到时不中止整轮对账：沿用上一次的现金快照并标记 stale。
+        # 否则一次 RPC 抖动会让 reconcile 整体失败 —— 而 reconcile 一失败，
+        # 本轮连持仓退出检查都不会执行，等于把止损停掉。
+        prev_cash = (previous or {}).get("cash_usdc")
+        if prev_cash is None:
+            raise
+        balances = {
+            "deposit_wallet": float(prev_cash),
+            "eoa": float((previous or {}).get("eoa_idle_pusd") or 0.0),
+        }
+        balances_source = f"stale:{type(exc).__name__}"
+        print(f"[余额降级] RPC 不可用，沿用上次现金快照 ${balances['deposit_wallet']:.2f}（{type(exc).__name__}）", flush=True)
     open_orders = read_open_orders()
     return {
         "eoa": eoa,
@@ -174,6 +224,7 @@ def fetch_sources() -> Dict[str, Any]:
         "activity": activity,
         "positions": positions,
         "balances": balances,
+        "balances_source": balances_source,
         "open_orders": open_orders,
     }
 
@@ -204,12 +255,20 @@ def rebuild_trade_ledger(activity: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "outcome": str(trade.get("outcome") or ""),
                 "shares": 0.0,
                 "cost": 0.0,
+                "fee_paid": 0.0,
+                "fee_basis": 0.0,
                 "opened_at": int(trade.get("timestamp") or 0),
             },
         )
         if side == "BUY":
             position["shares"] += size
             position["cost"] += value
+            # 用真实成交反解该市场的 taker 费率：fee = usdcSize − size×price
+            # 费率 = Σfee / Σ[size × p × (1−p)]，与 estimate_taker_fee 的公式同源。
+            gross = size * price
+            if value > gross:
+                position["fee_paid"] += value - gross
+                position["fee_basis"] += size * (price * (1.0 - price))
             buys += value
             continue
 
@@ -294,10 +353,179 @@ def resolve_pending_orders(
     return stats
 
 
+def _target_from_cost(entry_price: float) -> float:
+    """退出规则 v2 的默认目标价：入场 × (1 + TAKE_PROFIT_RETURN)，封顶 0.99。"""
+    try:
+        tp_return = float(os.getenv("TAKE_PROFIT_RETURN", "2.0"))
+    except (TypeError, ValueError):
+        tp_return = 2.0
+    if not math.isfinite(tp_return):
+        tp_return = 2.0
+    tp_return = max(0.05, min(20.0, tp_return))
+    return round(min(0.99, max(0.001, entry_price) * (1.0 + tp_return)), 4)
+
+
+def recover_position_strategy(
+    old: Dict[str, Any], entry_price: float, entry_orders: List[Dict[str, Any]]
+) -> Dict[str, float]:
+    """恢复开仓策略参数；历史缺字段时按真实成本推导，禁止虚构中性基准。"""
+    entry_price = min(0.9999, max(0.0001, float(entry_price)))
+    z_entry = math.log(entry_price / (1.0 - entry_price))
+    ordered = sorted(entry_orders, key=lambda row: str(row.get("created_at_utc") or ""))
+    old_tick = old.get("tick_size")
+    tick_size = float(old_tick) if isinstance(old_tick, (int, float)) and 0 < old_tick <= 1 else 0.01
+    target = None
+    recovered = {
+        "signal_price": old.get("signal_price"),
+        "estimated_execution_price": old.get("estimated_execution_price"),
+        "p_est": old.get("p_est", entry_price),
+        "estimated_fee_cost_usdc": old.get("estimated_fee_cost_usdc", 0.0),
+        "hours_left": old.get("hours_left"),
+        "fee_rate": old.get("fee_rate"),
+        "fee_exponent": old.get("fee_exponent"),
+    }
+    # 退出规则 v2 的仓位目标价由成本推导，不能被开仓时写入的旧口径目标价覆盖。
+    # 否则每轮对账都会把 target_prob 回退成旧值（面板闪回，且中途失败的轮次会保留错误值）。
+    v2_rule = old.get("exit_rule_version") == 2
+    for order in ordered:
+        strategy = order.get("strategy") or {}
+        order_tick = strategy.get("tick_size")
+        if isinstance(order_tick, (int, float)) and 0 < order_tick <= 1:
+            tick_size = float(order_tick)
+        if strategy.get("exit_rule_version") == 2:
+            v2_rule = True
+        value = strategy.get("target_prob")
+        if isinstance(value, (int, float)) and math.isfinite(value) and 0 < value <= 1:
+            target = float(value)
+            for key in recovered:
+                if strategy.get(key) is not None:
+                    recovered[key] = strategy[key]
+            break
+    if v2_rule:
+        target = _target_from_cost(entry_price)
+    elif target is None and entry_orders:
+        target = _target_from_cost(entry_price)
+    if target is None:
+        old_target = old.get("target_prob")
+        if isinstance(old_target, (int, float)) and math.isfinite(old_target) and 0 < old_target <= 1:
+            target = float(old_target)
+        else:
+            target = _target_from_cost(entry_price)
+
+    old_peak = old.get("z_peak")
+    legacy_zero = old.get("z_entry") == 0 and old_peak == 0 and abs(z_entry) > 1e-9
+    if not isinstance(old_peak, (int, float)) or not math.isfinite(old_peak) or legacy_zero:
+        z_peak = z_entry
+    else:
+        z_peak = max(z_entry, float(old_peak))
+
+    # 峰值买一：优先用显式记录；旧账本没有该字段时由 z_peak 反解。
+    # 反解结果必须落在 (0, 0.999) 内，且排除历史零值污染，否则退化为入场价（保守方向：
+    # 宁可晚一点启动追踪，也不能因为错误的峰值让仓位被立刻卖出）。
+    old_peak_bid = old.get("peak_bid")
+    peak_bid = None
+    if isinstance(old_peak_bid, (int, float)) and math.isfinite(old_peak_bid) and 0 < old_peak_bid < 1:
+        peak_bid = float(old_peak_bid)
+    elif not (abs(z_peak) < 1e-9 and abs(z_entry) > 1e-3):
+        decoded = 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, z_peak))))
+        if 0 < decoded < 0.999:
+            peak_bid = decoded
+    if peak_bid is None:
+        peak_bid = entry_price
+    peak_bid = max(entry_price, peak_bid)
+
+    return {
+        **recovered,
+        "target_prob": round(target, 4),
+        "peak_bid": round(peak_bid, 4),
+        "exit_rule_version": 2 if v2_rule else None,
+        "z_entry": round(z_entry, 4),
+        "z_peak": round(z_peak, 4),
+        "tick_size": tick_size,
+    }
+
+
+def attach_engine_exit_reasons(
+    closed_trades: List[Dict[str, Any]], recorded_orders: List[Dict[str, Any]]
+) -> None:
+    """把引擎记录的平仓原因回填到对账生成的平仓记录上。
+
+    对账按链上成交重建账本，本身不知道当时的触发规则，只能统一写
+    "CLOB 真实 SELL 成交（移动平均成本对账）"。但引擎下单时已把 exit_reason
+    写进 order_ledger 的 notes。这里按 (token_id, 时间窗口, 价格) 回连，
+    命中则用真实原因（如"成本硬止损"/"峰值回撤止盈"）替换占位文案。
+
+    注意：notes 在下单后会被状态机改写成进度提示（如"已不在 CLOB 挂单列表"），
+    这些不是触发原因，必须排除，否则会把状态提示错标成平仓原因。
+
+    只改展示字段，不参与任何金额或持仓计算；任何异常都静默跳过。
+    """
+    # 这些是 order_ledger 的状态机文案，不是退出触发原因
+    status_note_prefixes = (
+        "已不在 CLOB 挂单列表",
+        "触发退出，撤销旧止盈单",
+        "目标价与退出规则",
+        "订单意图已持久化",
+        "链上已存在活跃卖单",
+        "止盈限价卖单等待提交",
+        "目标限价卖单等待提交",
+    )
+    exits = []
+    for order in recorded_orders:
+        if str(order.get("intent") or "") != "EXIT":
+            continue
+        if str(order.get("side") or "").upper() != "SELL":
+            continue
+        # 优先读不会被状态机改写的 reason；历史订单没有该字段时回落到 notes
+        reason = str(order.get("reason") or "").strip()
+        if not reason:
+            notes = str(order.get("notes") or "").strip()
+            if notes and not notes.startswith(status_note_prefixes):
+                reason = notes
+        if not reason:
+            continue
+        exits.append(dict(order, _reason=reason))
+    if not exits:
+        return
+    for row in closed_trades:
+        token = str(row.get("token_id") or "")
+        try:
+            closed_ts = datetime.strptime(
+                str(row.get("closed_at") or "").replace(" UTC", ""), "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc).timestamp()
+        except (TypeError, ValueError):
+            continue
+        best_note = None
+        best_gap = None
+        for order in exits:
+            if str(order.get("token_id") or "") != token:
+                continue
+            try:
+                created_ts = datetime.fromisoformat(
+                    str(order.get("created_at_utc") or "").replace("Z", "+00:00")
+                ).timestamp()
+            except (TypeError, ValueError):
+                continue
+            gap = closed_ts - created_ts
+            # 成交必须发生在下单之后，且不超过 30 分钟（避免把历史订单误配到新成交）
+            if gap < -60 or gap > 1800:
+                continue
+            if best_gap is None or gap < best_gap:
+                best_gap, best_note = gap, str(order["_reason"])
+        if best_note:
+            row["engine_exit_reason"] = best_note
+            row["exit_reason"] = best_note
+            row["data_source"] = f"{row.get('data_source', '')} + engine_reason".strip()
+
+
 def build_reconciled_state(previous: Dict[str, Any], sources: Dict[str, Any]) -> Dict[str, Any]:
     ledger = rebuild_trade_ledger(sources["activity"])
     lots = ledger["lots"]
     old_positions = {str(row.get("token_id")): row for row in previous.get("open_positions", [])}
+    import order_ledger
+
+    recorded_orders = list((order_ledger.load_ledger().get("orders") or {}).values())
+    attach_engine_exit_reasons(ledger["closed_trades"], recorded_orders)
     actual_tokens = set()
     open_positions = []
     position_value = 0.0
@@ -335,6 +563,25 @@ def build_reconciled_state(previous: Dict[str, Any], sources: Dict[str, Any]) ->
         cost = lot["cost"]
         entry_price = cost / shares if shares else 0.0
         old = old_positions.get(token_id, {})
+        entry_orders = [
+            order for order in recorded_orders
+            if str(order.get("token_id") or "") == token_id
+            and order.get("intent") == order_ledger.INTENT_ENTRY
+        ]
+        strategy = recover_position_strategy(old, entry_price, entry_orders)
+        # 费率：优先用真实成交反解值（ground truth）；反解不到再沿用开仓时记录的费率。
+        derived_fee_rate = 0.0
+        basis = float(lot.get("fee_basis") or 0.0)
+        paid = float(lot.get("fee_paid") or 0.0)
+        if basis > 1e-9 and paid > 0:
+            derived_fee_rate = max(0.0, min(0.5, paid / basis))
+        stored_fee_rate = strategy.get("fee_rate")
+        fee_rate = derived_fee_rate if derived_fee_rate > 0 else (
+            float(stored_fee_rate) if isinstance(stored_fee_rate, (int, float)) and stored_fee_rate >= 0 else 0.0
+        )
+        fee_exponent = strategy.get("fee_exponent")
+        if not isinstance(fee_exponent, (int, float)) or not math.isfinite(float(fee_exponent)):
+            fee_exponent = 1.0
         redeemable = bool(raw.get("redeemable"))
         open_positions.append(
             {
@@ -351,12 +598,25 @@ def build_reconciled_state(previous: Dict[str, Any], sources: Dict[str, Any]) ->
                 "current_value_usdc": round(current_value, 6),
                 "unrealized_pnl_usdc": round(current_value - cost, 6),
                 "unrealized_pnl_pct": round(((current_value - cost) / cost) * 100, 2) if cost else 0.0,
-                "p_est": old.get("p_est", entry_price),
-                "edge_at_entry": old.get("edge_at_entry", 0.0),
+                "p_est": strategy["p_est"],
+                "edge_at_entry": round(
+                    float(strategy["p_est"]) - entry_price - float(strategy["estimated_fee_cost_usdc"] or 0) / shares,
+                    6,
+                ),
+                "signal_price": strategy["signal_price"],
+                "estimated_execution_price": strategy["estimated_execution_price"],
+                "estimated_fee_cost_usdc": strategy["estimated_fee_cost_usdc"],
+                "realized_slippage": round(entry_price - float(strategy["signal_price"]), 6) if strategy["signal_price"] is not None else None,
                 "quarter_kelly": old.get("quarter_kelly", 0.0),
-                "target_prob": old.get("target_prob", 0.92),
-                "z_entry": old.get("z_entry", 0.0),
-                "z_peak": old.get("z_peak", 0.0),
+                "target_prob": strategy["target_prob"],
+                "peak_bid": strategy["peak_bid"],
+                "exit_rule_version": strategy.get("exit_rule_version"),
+                "fee_rate": round(float(fee_rate), 6),
+                "fee_exponent": float(fee_exponent),
+                "z_entry": strategy["z_entry"],
+                "z_peak": strategy["z_peak"],
+                "tick_size": strategy["tick_size"],
+                "expires_at": old.get("expires_at"),
                 "opened_at": old.get("opened_at") or utc_timestamp(lot["opened_at"]),
                 "book_updated_at": utc_now(),
                 "book_status": "RESOLVED" if redeemable else "DATA_API",
@@ -428,6 +688,7 @@ def build_reconciled_state(previous: Dict[str, Any], sources: Dict[str, Any]) ->
                 "reconciled_at": reconciled_at,
                 "deposit_wallet": sources["deposit_wallet"],
                 "accounting_method": "CLOB activity moving-average cost; Data API position marks; Polygon pUSD balance",
+                "balances_source": sources.get("balances_source", "rpc"),
                 "activity_count": len(sources["activity"]),
                 "trade_count": ledger["trade_count"],
                 "non_trade_activity": ledger["non_trade_activity"],
@@ -453,7 +714,7 @@ def atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
 
 def reconcile(apply: bool = False, backup: bool = False) -> Dict[str, Any]:
     previous = json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8")) if PORTFOLIO_FILE.exists() else {}
-    sources = fetch_sources()
+    sources = fetch_sources(previous)
     state = build_reconciled_state(previous, sources)
     if apply:
         if backup and PORTFOLIO_FILE.exists():

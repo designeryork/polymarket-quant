@@ -94,8 +94,10 @@ class PolymarketV2Executor:
             import proxy_detector
 
             self._proxy_applied = proxy_detector.apply_to_clob_sdk()
-        except Exception:
-            self._proxy_applied = {"ok": False, "detail": "代理应用失败，沿用 SDK 默认配置"}
+        except Exception as exc:
+            raise RuntimeError("CLOB 代理通道初始化失败，拒绝沿用 SDK 默认网络配置。") from exc
+        if not self._proxy_applied.get("ok"):
+            raise RuntimeError(self._proxy_applied.get("detail") or "CLOB 无可用代理通道。")
         self.client = ClobClient(self.host, key=self.private_key, chain_id=137, creds=self.creds)
 
     @staticmethod
@@ -120,6 +122,7 @@ class PolymarketV2Executor:
         size_shares: float,
         tick_size: float = 0.01,
         order_type: str = "GTC",
+        salt: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         构造并签名 POLY_1271 (signatureType=3) 订单 JSON 载荷
@@ -161,7 +164,7 @@ class PolymarketV2Executor:
         else:  # SELL: 付出 shares (makerAmount)，获得 pUSD (takerAmount)
             maker_amt, taker_amt = size_units, usdc_units
 
-        salt = secrets.randbits(52)
+        salt = secrets.randbits(52) if salt is None else int(salt)
         ts = int(time.time())
 
         order_struct = {
@@ -325,8 +328,12 @@ class PolymarketV2Executor:
             try:
                 raw = self.client.get_orders()
                 rows = raw.get("data", []) if isinstance(raw, dict) else (raw or [])
-            except Exception:
+                self._orders_query_error = ""
+            except Exception as exc:
+                # 查询失败 ≠ 没有挂单。旧实现失败时返回空列表，
+                # 调用方会误判"链上没有卖单"，进而撤单重挂或拒绝平仓。
                 rows = []
+                self._orders_query_error = str(exc)[:200]
             grouped: Dict[str, List[Dict[str, Any]]] = {}
             for row in rows:
                 token_id = str(row.get("asset_id") or "")
@@ -335,6 +342,10 @@ class PolymarketV2Executor:
                 grouped.setdefault(token_id, []).append(row)
             self._live_orders_cache = grouped
         return getattr(self, "_live_orders_cache", {})
+
+    def last_orders_query_error(self) -> str:
+        """最近一次链上挂单查询的错误信息；空字符串表示查询成功。"""
+        return str(getattr(self, "_orders_query_error", "") or "")
 
     def has_live_sell_order(self, token_id: str, refresh: bool = True) -> bool:
         """该 token 是否已有链上活跃的卖单（含止盈单与平仓单）。"""

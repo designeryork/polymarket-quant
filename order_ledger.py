@@ -54,6 +54,7 @@
 --------
 无法确认状态时，一律按"订单可能仍然存在"处理 —— 宁可少开一单，也不重复下单或超额卖出。
 """
+import hashlib
 import json
 import os
 import time
@@ -66,6 +67,7 @@ LEDGER_FILE = BASE_DIR / "state" / "pending_orders.json"
 
 LEDGER_VERSION = 1
 
+STATUS_SUBMITTING = "SUBMITTING"
 STATUS_ACCEPTED = "ACCEPTED"
 STATUS_CONFIRMED = "CONFIRMED"
 STATUS_CANCELLED = "CANCELLED"
@@ -73,11 +75,29 @@ STATUS_FILLED = "FILLED"
 STATUS_UNKNOWN = "UNKNOWN"
 
 # 这些状态代表"订单可能仍在链上"，必须阻止同一 token 的重复下单
-BLOCKING_STATUSES = (STATUS_ACCEPTED, STATUS_UNKNOWN)
+BLOCKING_STATUSES = (STATUS_SUBMITTING, STATUS_ACCEPTED, STATUS_UNKNOWN)
 
 INTENT_ENTRY = "ENTRY"
 INTENT_TAKE_PROFIT = "TAKE_PROFIT"
 INTENT_EXIT = "EXIT"
+
+
+def make_order_intent(kind: str, token_id: str, cycle_id: str) -> Dict[str, Any]:
+    intent_id = hashlib.sha256(f"{kind}|{token_id}|{cycle_id}".encode("utf-8")).hexdigest()
+    return {"intent_id": f"intent-{intent_id}", "salt": int(intent_id[:13], 16)}
+
+
+def attach_clob_order_id(intent_id: str, clob_order_id: str) -> Optional[Dict[str, Any]]:
+    ledger = load_ledger()
+    order = ledger["orders"].pop(str(intent_id), None)
+    if order is None:
+        return None
+    order["order_id"] = str(clob_order_id)
+    order["status"] = STATUS_ACCEPTED
+    order["updated_at_utc"] = utc_now()
+    ledger["orders"][str(clob_order_id)] = order
+    save_ledger(ledger)
+    return order
 
 
 def utc_now() -> str:
@@ -128,9 +148,17 @@ def record_order(
     outcome: str = "",
     status: str = STATUS_ACCEPTED,
     notes: str = "",
+    strategy: Optional[Dict[str, Any]] = None,
+    reason: str = "",
 ) -> Dict[str, Any]:
-    """登记一笔在途订单并持久化。"""
+    """登记一笔在途订单并持久化。
+
+    `reason` 专用于记录"这笔单是为什么下的"（如平仓触发规则）。
+    它不会被 update_status / 对账状态机改写，因此面板能长期还原真实触发原因；
+    `notes` 会被状态机覆盖，不适合承载原因。
+    """
     ledger = load_ledger()
+    existing = ledger["orders"].get(str(order_id)) or {}
     ledger["orders"][str(order_id)] = {
         "order_id": str(order_id),
         "token_id": str(token_id),
@@ -143,9 +171,13 @@ def record_order(
         "market_question": str(market_question or "")[:120],
         "outcome": str(outcome or "")[:40],
         "status": status,
-        "created_at_utc": utc_now(),
+        # created_at 必须保持首次登记时间：链上回填每轮都会重写这一行，
+        # 若在这里重置时间，"平仓单挂了多久"就永远算成 0，超时重挂永远不触发。
+        "created_at_utc": existing.get("created_at_utc") or utc_now(),
         "updated_at_utc": utc_now(),
         "notes": str(notes or "")[:200],
+        "reason": str(reason or "")[:200],
+        "strategy": dict(strategy) if isinstance(strategy, dict) else {},
     }
     save_ledger(ledger)
     return ledger["orders"][str(order_id)]
@@ -252,6 +284,35 @@ def has_open_sell_for_token(token_id: str) -> bool:
         if str(order.get("token_id") or "") == target:
             return True
     return False
+
+
+def release_stale_sell_orders(token_id: str, reason: str = "") -> int:
+    """把该 token 下仍处于阻塞状态的卖单标记为 CONFIRMED。
+
+    使用场景：链上已查无此单（多半是刚成交，CLOB 立即从挂单列表移除），
+    但持仓与账本还没对上。此时本地记录若继续阻塞，
+    退出逻辑会一直判定"本地有卖单、链上未确认"而无法止损。
+
+    链上是权威来源；这里只解除占位，不代表成交或撤单的最终判定
+    （成交与否仍由持仓对账决定）。
+    """
+    ledger = load_ledger()
+    released = 0
+    for order in ledger.get("orders", {}).values():
+        if str(order.get("side", "")).upper() != "SELL":
+            continue
+        if str(order.get("token_id") or "") != str(token_id):
+            continue
+        if order.get("status") not in BLOCKING_STATUSES:
+            continue
+        order["status"] = STATUS_CONFIRMED
+        order["updated_at_utc"] = utc_now()
+        order["resolved_at_utc"] = utc_now()
+        order["notes"] = str(reason or "链上查无此单，本地记录判定为过期")[:200]
+        released += 1
+    if released:
+        save_ledger(ledger)
+    return released
 
 
 def reconcile_with_open_orders(open_orders: List[Dict[str, Any]]) -> Dict[str, Any]:

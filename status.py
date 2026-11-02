@@ -170,7 +170,7 @@ def print_report():
             )
         else:
             print("  单实例锁         : 未持有（当前无后台循环在运行）")
-        proxy_text = proxy.get("proxy_url") or "直连（未使用代理）"
+        proxy_text = proxy.get("proxy_url") or "无可用代理（直连已禁用）"
         print(
             f"  网络通道         : {proxy_text} | 延迟 {proxy.get('latency_s', 0)}s | "
             f"来源 {proxy.get('source','')}"
