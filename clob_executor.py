@@ -79,7 +79,7 @@ class PolymarketV2Executor:
         self.private_key = os.getenv("PRIVATE_KEY", "")
         self.eoa_address = Account.from_key(self.private_key).address
         self.deposit_wallet = Web3.to_checksum_address(
-            os.getenv("DEPOSIT_WALLET", "0xaF56445fAe9Fe3eE8d74988ad873f3677F672467")
+            os.getenv("DEPOSIT_WALLET", "")
         )
         self.creds = ApiCreds(
             api_key=os.getenv("CLOB_API_KEY", ""),
@@ -407,7 +407,7 @@ def _offline_signature_selftest(samples: int = 200) -> int:
 
     token_id = "92708239841263145361017304203618583258102423804507532186791623602897510452108"
     exchange = Web3.to_checksum_address("0xE111180000d2663C0091e4f400237545B87B996B")
-    depositor = Web3.to_checksum_address(os.getenv("DEPOSIT_WALLET", "0xaF56445fAe9Fe3eE8d74988ad873f3677F672467"))
+    depositor = Web3.to_checksum_address(os.getenv("DEPOSIT_WALLET", ""))
     private_key = os.getenv("PRIVATE_KEY", "")
     if not private_key:
         print("[自检失败] 未找到 PRIVATE_KEY，无法进行离线签名验证。")
