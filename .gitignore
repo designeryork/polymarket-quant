@@ -53,3 +53,11 @@ Thumbs.db
 
 # 纸盘验证副本是独立部署，不纳入本仓库
 035_polymarket_paper/
+
+# ===== 不随本策略开源的私人内容 =====
+# 002_follow/ 是另一个独立项目（跟单 copybot），与本策略无关
+002_follow/
+# WorkBuddy 的 AI 工作记忆与身份文件
+.workbuddy/
+# 个人 prompt 素材
+000-给ai的promt/
