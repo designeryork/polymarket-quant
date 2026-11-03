@@ -185,6 +185,15 @@ def fetch_exit_info(url: Optional[str], timeout: float = 15.0) -> Dict[str, Any]
 # 结果切换代理的瞬间失败一次，引擎就再也发不出请求。
 NEGATIVE_CACHE_TTL = 30.0
 
+# 云端环境（GitHub Actions 等）没有本地代理，本机网络本身就能直连 Polymarket。
+# 设 ALLOW_DIRECT=true 后允许"显式直连"——这是显式选择而非隐式回退：
+# 默认仍保持 fail-closed，避免本机代理挂掉时悄悄走直连被墙。
+DIRECT_URL = "direct://"
+
+
+def _allow_direct() -> bool:
+    return os.getenv("ALLOW_DIRECT", "").strip().lower() == "true"
+
 
 class ProxyDetector:
     """探测并缓存可用的网络通道。"""
@@ -234,6 +243,22 @@ class ProxyDetector:
                 self.latency = elapsed
                 break
 
+        if self.selected_url is None and _allow_direct():
+            ok, detail, elapsed = _probe_url(None, timeout=probe_timeout)
+            self.attempts.append(
+                {
+                    "url": DIRECT_URL,
+                    "source": "显式直连(ALLOW_DIRECT)",
+                    "ok": ok,
+                    "detail": detail,
+                    "latency_s": round(elapsed, 2),
+                }
+            )
+            if ok:
+                self.selected_url = DIRECT_URL
+                self.source = "显式直连（ALLOW_DIRECT=true）"
+                self.latency = elapsed
+
         if self.selected_url is None:
             self.source = "未找到可用代理（直连已禁用）"
             self.latency = 0.0
@@ -266,7 +291,8 @@ class ProxyDetector:
             raise RuntimeError("未找到可用代理；为避免使用不可用直连，本轮网络请求已拒绝。")
         session = requests.Session()
         session.trust_env = False
-        session.proxies = {"http": self.selected_url, "https": self.selected_url}
+        if self.selected_url != DIRECT_URL:
+            session.proxies = {"http": self.selected_url, "https": self.selected_url}
         return session
 
     def summary(self) -> Dict[str, Any]:
@@ -334,7 +360,12 @@ def apply_to_clob_sdk() -> Dict[str, Any]:
         import httpx
         from py_clob_client.http_helpers import helpers
 
-        kwargs = {"http2": True, "timeout": httpx.Timeout(20.0, connect=12.0), "proxy": url}
+        if url == DIRECT_URL:
+            kwargs = {"http2": True, "timeout": httpx.Timeout(20.0, connect=12.0), "proxy": None}
+            applied["detail"] = "已重建 SDK 客户端，显式直连"
+        else:
+            kwargs = {"http2": True, "timeout": httpx.Timeout(20.0, connect=12.0), "proxy": url}
+            applied["detail"] = f"已重建 SDK 客户端，代理={url}"
         old_client = getattr(helpers, "_http_client", None)
         helpers._http_client = httpx.Client(**kwargs)
         applied["ok"] = True

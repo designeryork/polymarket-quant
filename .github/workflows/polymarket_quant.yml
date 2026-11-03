@@ -49,6 +49,8 @@ jobs:
           # 否则云端只做只读巡检，绝不提交订单。
           PAPER: ${{ secrets.PAPER || 'true' }}
           ALLOW_LIVE: ${{ secrets.ALLOW_LIVE || 'false' }}
+          # 云端 Runner 无本地代理，允许显式直连（本机不受影响，仍走代理探测）
+          ALLOW_DIRECT: 'true'
         run: |
           python quant_engine.py
 
