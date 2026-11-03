@@ -6,6 +6,10 @@ on:
     - cron: '*/10 * * * *'
   workflow_dispatch:
 
+# 新仓库默认 GITHUB_TOKEN 只读；回写状态需要显式声明写权限
+permissions:
+  contents: write
+
 concurrency:
   group: polymarket-quant-single-runner
   cancel-in-progress: false
