@@ -45,7 +45,12 @@ def run(cmd, timeout=120):
 
 def fetch_snapshot() -> bool:
     """从 state-snapshot 分支拉取最新状态；成功返回 True。"""
-    fetch = run(["git", "fetch", "--depth", "1", "origin", SNAPSHOT_BRANCH])
+    # 显式更新远程跟踪引用：该分支是 --force 推送的，
+    # 普通 `git fetch origin <branch>` 只写 FETCH_HEAD，远程跟踪引用会停在旧快照。
+    fetch = run([
+        "git", "fetch", "--depth", "1", "origin",
+        "+refs/heads/%s:refs/remotes/origin/%s" % (SNAPSHOT_BRANCH, SNAPSHOT_BRANCH),
+    ])
     if fetch.returncode != 0:
         stamp = time.strftime("%H:%M:%S")
         print(f"[{stamp}] 拉取 {SNAPSHOT_BRANCH} 失败：{(fetch.stderr or '').strip()[:120]}")

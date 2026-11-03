@@ -74,9 +74,16 @@ jobs:
           pip install -r requirements.txt
 
       - name: Restore State From Snapshot Branch
-        # 上一轮结束时推的状态在这里恢复，账本与净值曲线得以连续
+        # 上一轮结束时推的状态在这里恢复，账本与净值曲线得以连续。
+        # 注意：state/ 已被 .gitignore 排除且已从 master 移除，
+        # checkout 后该目录不存在 —— 必须先 mkdir，否则重定向会失败。
         run: |
-          git fetch --depth 1 origin state-snapshot || true
+          mkdir -p state logs
+          # 显式更新远程跟踪引用：state-snapshot 是 --force 推送的，
+          # 普通 `git fetch origin state-snapshot` 只写 FETCH_HEAD，
+          # refs/remotes/origin/state-snapshot 会停留在旧快照上。
+          git fetch --depth 1 origin \
+            +refs/heads/state-snapshot:refs/remotes/origin/state-snapshot || true
           if git show origin/state-snapshot:state/portfolio_paper.json > /dev/null 2>&1; then
             git show origin/state-snapshot:state/portfolio_paper.json > state/portfolio_paper.json
             git show origin/state-snapshot:state/equity_history_paper.jsonl > state/equity_history_paper.jsonl || true
