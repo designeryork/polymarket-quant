@@ -1,99 +1,137 @@
-name: Polymarket 10U Autonomous Quant Loop
+name: Polymarket Paper Trading (Cloud, 24/7)
+
+# ============================================================================
+# 为什么用"长驻 job + 自续跑"，而不是纯 cron
+# ----------------------------------------------------------------------------
+# GitHub 官方限制：定时 workflow 最短间隔是 5 分钟（cron 下限），
+# 写 '*/1 * * * *' 不会被调度 —— GitHub 直接忽略低于 5 分钟的间隔。
+# 所以"每分钟一轮"没法只靠 cron 实现。
+#
+# 方案：cron 每 5 小时触发一次 → job 内部用 quant_engine.py --loop --interval 60
+#       连续跑 5 小时（每分钟一轮）→ 结束时用 workflow_dispatch 立刻触发下一轮，
+#       形成不断链的自续跑。GitHub 托管 runner 单个 job 最长 6 小时，
+#       这里取 5 小时留出安全余量，cron 作为兜底（万一自续跑失败）。
+#
+# 状态持久化：状态不进 master（master 只放代码，历史干净）。
+#       引擎产出的账本/面板通过 sync_state.py 推到独立的 state-snapshot 分支，
+#       该分支每次 --force 覆盖，仓库体积恒定，不会随运行时间膨胀。
+#
+# 安全：PAPER=true + ALLOW_LIVE=false 双保险，云端绝不可能下真单。
+# ============================================================================
 
 on:
   schedule:
-    # 每 30 分钟云端巡检一次。
-    # 频率取舍：私有仓 Actions 免费配额 2000 分钟/月，每轮约 1 分钟，
-    # 30 分钟一轮 ≈ 1300 分钟/月，可全天候跑满整月；
-    # 若想要更高频率：把仓库设为 public（Actions 免费），或升级付费计划。
-    - cron: '*/30 * * * *'
+    # 每 5 小时整点后 7 分钟触发（避开整点高峰，GitHub 建议错开）
+    - cron: '7 */5 * * *'
   workflow_dispatch:
+    inputs:
+      hours:
+        description: '本次连续运行多少小时（默认 5）'
+        required: false
+        default: '5'
 
-# 新仓库默认 GITHUB_TOKEN 只读；回写状态需要显式声明写权限
+# 同一时间只允许一个巡检实例：新一轮必须等上一轮结束，避免账本并发写坏
+concurrency:
+  group: polymarket-paper-cloud
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
-concurrency:
-  group: polymarket-quant-single-runner
-  cancel-in-progress: false
-
-env:
-  # secrets 不能直接用在步骤的 if 里，借 job 级 env 转接：
-  # 两个 secret 都配置了才发布 Pages 面板
-  HAS_PAGES: ${{ secrets.PAGES_TOKEN != '' && secrets.PAGES_REPO != '' }}
-
 jobs:
-  quant-scan:
+  paper-loop:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout Private Repository
-        uses: actions/checkout@v4
+    # 单 job 上限 6 小时；留余量给状态推送与收尾
+    timeout-minutes: 330
+    env:
+      # ---- 纸盘模式：绝不允许真实下单 ----
+      PAPER: 'true'
+      ALLOW_LIVE: 'false'
+      ALLOW_DIRECT: 'true'          # 云端 Runner 无本地代理，允许显式直连
+      SCAN_LIMIT: '60'              # 每轮评估的市场数
+      ROUND_BUDGET_SECONDS: '240'   # 单轮请求时间预算
+      ENGINE_INTERVAL: '60'         # 引擎循环间隔（秒）= 每分钟一轮
 
-      - name: Set up Python 3.12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # sync_state 需要读写已有分支
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
 
       - name: Install Dependencies
-        # PAPER 模式懒加载链上模块，只需这三个第三方包；requirements.txt 让 pip 缓存生效
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Single Quant Cycle (Fail-Closed)
+      - name: Restore State From Snapshot Branch
+        # 上一轮结束时推的状态在这里恢复，账本与净值曲线得以连续
+        run: |
+          git fetch --depth 1 origin state-snapshot || true
+          if git show origin/state-snapshot:state/portfolio_paper.json > /dev/null 2>&1; then
+            git show origin/state-snapshot:state/portfolio_paper.json > state/portfolio_paper.json
+            git show origin/state-snapshot:state/equity_history_paper.jsonl > state/equity_history_paper.jsonl || true
+            git show origin/state-snapshot:state/scan_rotation.json > state/scan_rotation.json || true
+            echo "已恢复上一轮纸盘状态"
+          else
+            echo "无历史快照（首次运行），从初始账本开始"
+          fi
+
+      - name: Run Paper Loop
+        # --loop 每 60 秒一轮；--paper 强制纸盘账本；单实例锁保证只有一个引擎。
+        # 到点后用 STOP 文件优雅停机（引擎每轮开头检查），保证账本与净值曲线写完整。
         env:
-          WALLET_ADDRESS: ${{ secrets.WALLET_ADDRESS }}
-          DEPOSIT_WALLET: ${{ secrets.DEPOSIT_WALLET }}
-          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-          CLOB_API_KEY: ${{ secrets.CLOB_API_KEY }}
-          CLOB_SECRET: ${{ secrets.CLOB_SECRET }}
-          CLOB_PASSPHRASE: ${{ secrets.CLOB_PASSPHRASE }}
-          # 默认必须是 PAPER。GitHub Runner 与本机不在同一台机器，
-          # 因此单实例锁（state/engine.lock）无法阻止两端同时实盘下单。
-          # 除非显式在仓库 Secrets 中同时设置 PAPER=false 与 ALLOW_LIVE=true，
-          # 否则云端只做只读巡检，绝不提交订单。
-          PAPER: ${{ secrets.PAPER || 'true' }}
-          ALLOW_LIVE: ${{ secrets.ALLOW_LIVE || 'false' }}
-          # 云端 Runner 无本地代理，允许显式直连（本机不受影响，仍走代理探测）
-          ALLOW_DIRECT: 'true'
+          RUN_HOURS: ${{ github.event.inputs.hours || '5' }}
         run: |
-          python quant_engine.py
+          # 后台定时器：到点创建 STOP 文件，引擎下一轮开头读到后安全退出
+          ( sleep $(( ${RUN_HOURS:-5} * 3600 )) && touch STOP ) &
+          TIMER_PID=$!
+          python quant_engine.py --loop --interval "$ENGINE_INTERVAL" --paper || true
+          kill $TIMER_PID 2>/dev/null || true
+          rm -f STOP
+          echo "本轮巡检结束"
 
-      - name: Persist Portfolio State & Dashboard
+      - name: Push State Snapshot
+        # 状态推到 state-snapshot 分支（--force，历史恒为 1 个提交，仓库不膨胀）
+        if: always()
         run: |
-          git config user.name "polymarket-quant-bot"
-          git config user.email "bot@users.noreply.github.com"
-          # 先拉取远程最新（本地或其他运行可能推过），减少 push 冲突
-          git pull --rebase --autostash || true
-          # state/ 与 logs/ 已被 .gitignore 排除，需用 -f 显式加入，
-          # 否则 git add 会因 "ignored by one of your .gitignore files" 直接失败。
-          # 实盘侧
-          git add -f state/portfolio.json dashboard.html || true
-          # 纸盘侧（云端唯一写入方）：面板 + 组合 + 净值曲线 + 心跳 + 市场池
-          git add -f dashboard_paper.html \
-                    state/portfolio_paper.json \
-                    state/equity_history_paper.jsonl \
-                    state/heartbeat_paper.json \
-                    state/market_universe.json \
-                    state/scan_rotation.json || true
-          # 信号日志（排查云端为什么没下单时用）
-          git add -f logs/signals_and_skips.jsonl || true
-          git diff --staged --quiet || git commit -m "chore: update quant state [skip ci]"
-          git push || (git pull --rebase --autostash && git push) || echo "::warning::push 失败，本轮状态未回传，下轮重试"
+          python sync_state.py push || echo "::warning::状态快照推送失败"
 
-      - name: Publish Paper Dashboard to Pages Repo
-        # 在仓库 Secrets 里配置 PAGES_REPO（如 designeryork/polymarket-paper-dashboard）
-        # 和 PAGES_TOKEN（有该仓写权限的 token）后，此步骤自动生效；
-        # 不配置则静默跳过，不影响巡检。
-        if: ${{ env.HAS_PAGES == 'true' }}
+      - name: Publish Dashboard To Pages
+        # 把最新面板推到公开面板仓，Pages 自动发布
+        if: always()
+        env:
+          PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
+          PAGES_REPO: ${{ secrets.PAGES_REPO }}
         run: |
-          git clone --depth 1 "https://x-access-token:${{ secrets.PAGES_TOKEN }}@github.com/${{ secrets.PAGES_REPO }}.git" pages_repo
-          cp dashboard_paper.html pages_repo/index.html
+          if [ -z "$PAGES_TOKEN" ] || [ -z "$PAGES_REPO" ]; then
+            echo "未配置 Pages secrets，跳过面板发布"
+            exit 0
+          fi
+          rm -rf pages_repo
+          git clone --depth 1 "https://x-access-token:${PAGES_TOKEN}@github.com/${PAGES_REPO}.git" pages_repo
+          if [ -f dashboard_paper.html ]; then
+            cp dashboard_paper.html pages_repo/index.html
+          fi
           cd pages_repo
           git config user.name "polymarket-quant-bot"
           git config user.email "bot@users.noreply.github.com"
           git add index.html
           git diff --staged --quiet || git commit -m "update paper dashboard $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
+
+      - name: Trigger Next Round
+        # 自续跑：立刻触发下一轮，消掉 5 小时 cron 之间的间隙
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOURS: ${{ github.event.inputs.hours || '5' }}
+        run: |
+          sleep 20
+          gh workflow run polymarket_quant.yml --ref master -f hours="$HOURS" \
+            || echo "::warning::下一轮触发失败，等待 cron 兜底"
