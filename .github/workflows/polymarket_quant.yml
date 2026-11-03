@@ -74,63 +74,55 @@ jobs:
           pip install -r requirements.txt
 
       - name: Restore State From Snapshot Branch
-        # 上一轮结束时推的状态在这里恢复，账本与净值曲线得以连续。
-        # 注意：state/ 已被 .gitignore 排除且已从 master 移除，
-        # checkout 后该目录不存在 —— 必须先 mkdir，否则重定向会失败。
+        # 用 GitHub API 下载快照（不能用 git show：浅克隆下远程跟踪引用
+        # 更新不了，会读到过期引用，甚至让引擎以空白账本启动清零持仓）。
         run: |
           mkdir -p state logs
-          # 显式更新远程跟踪引用：state-snapshot 是 --force 推送的，
-          # 普通 `git fetch origin state-snapshot` 只写 FETCH_HEAD，
-          # refs/remotes/origin/state-snapshot 会停留在旧快照上。
-          git fetch --depth 1 origin \
-            +refs/heads/state-snapshot:refs/remotes/origin/state-snapshot || true
-          if git show origin/state-snapshot:state/portfolio_paper.json > /dev/null 2>&1; then
-            git show origin/state-snapshot:state/portfolio_paper.json > state/portfolio_paper.json
-            git show origin/state-snapshot:state/equity_history_paper.jsonl > state/equity_history_paper.jsonl || true
-            git show origin/state-snapshot:state/scan_rotation.json > state/scan_rotation.json || true
-            echo "已恢复上一轮纸盘状态"
-          else
-            echo "无历史快照（首次运行），从初始账本开始"
+          python fetch_state.py
+
+      - name: Verify Ledger Restored
+        # 保险：账本没恢复出来就**拒绝启动引擎**。
+        # 空白账本一旦写回快照分支，持仓与净值曲线就永久丢失了。
+        run: |
+          if [ ! -f state/portfolio_paper.json ]; then
+            echo "::error::账本未恢复，拒绝启动引擎（否则会以 \$10 空白账本覆盖真实持仓）"
+            exit 1
           fi
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("state/portfolio_paper.json", encoding="utf-8"))
+          equity = float(data.get("total_equity_usdc") or 0)
+          positions = len(data.get("open_positions") or [])
+          print(f"账本校验通过: 净值 ${equity:.2f} | 持仓 {positions} | 更新时间 {data.get('last_updated')}")
+          # 有持仓但净值回到初始值 = 明显异常，宁可停下也不写回
+          if equity <= 10.0 and positions == 0 and data.get("closed_trades"):
+              print("::warning::账本净值异常（可能已被重置），请检查")
+          PY
 
       - name: Run Paper Loop
-        # cloud_runner.py 负责三件事：
+        # cloud_runner.py 负责四件事：
         #   1. 后台跑 quant_engine.py --loop --interval 60（每分钟一轮）
         #   2. 每 5 分钟推一次状态快照 —— 即使 job 中途崩溃也只丢几分钟数据
-        #   3. 到点创建 STOP 文件让引擎优雅停机，账本写完整后再退出
+        #   3. 每 5 分钟同步发布面板 —— 否则 Pages 会一直停在旧数据、显示"已过期"
+        #   4. 到点创建 STOP 文件让引擎优雅停机，账本写完整后再退出
         env:
           RUN_HOURS: ${{ github.event.inputs.hours || '5' }}
+          PAGES_REPO: ${{ secrets.PAGES_REPO }}
+          PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
         run: |
-          python cloud_runner.py --hours "$RUN_HOURS" --interval "$ENGINE_INTERVAL" --push-interval 300
+          python cloud_runner.py \
+            --hours "$RUN_HOURS" \
+            --interval "$ENGINE_INTERVAL" \
+            --push-interval 300 \
+            --pages-repo "$PAGES_REPO" \
+            --pages-token "$PAGES_TOKEN"
 
       - name: Push State Snapshot
-        # 状态推到 state-snapshot 分支（--force，历史恒为 1 个提交，仓库不膨胀）
+        # 兜底：cloud_runner.py 已在运行期间每 5 分钟推过一次，
+        # 这里再推一次，确保 job 异常退出时最新状态也能落地。
         if: always()
         run: |
           python sync_state.py push || echo "::warning::状态快照推送失败"
-
-      - name: Publish Dashboard To Pages
-        # 把最新面板推到公开面板仓，Pages 自动发布
-        if: always()
-        env:
-          PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
-          PAGES_REPO: ${{ secrets.PAGES_REPO }}
-        run: |
-          if [ -z "$PAGES_TOKEN" ] || [ -z "$PAGES_REPO" ]; then
-            echo "未配置 Pages secrets，跳过面板发布"
-            exit 0
-          fi
-          rm -rf pages_repo
-          git clone --depth 1 "https://x-access-token:${PAGES_TOKEN}@github.com/${PAGES_REPO}.git" pages_repo
-          if [ -f dashboard_paper.html ]; then
-            cp dashboard_paper.html pages_repo/index.html
-          fi
-          cd pages_repo
-          git config user.name "polymarket-quant-bot"
-          git config user.email "bot@users.noreply.github.com"
-          git add index.html
-          git diff --staged --quiet || git commit -m "update paper dashboard $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git push
 
       - name: Trigger Next Round
         # 自续跑：立刻触发下一轮，消掉 5 小时 cron 之间的间隙。

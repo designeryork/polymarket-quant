@@ -18,6 +18,7 @@ GitHub Actions 的单 job 最长 6 小时，云端要用"长驻 job + 自续跑"
 """
 import argparse
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -28,14 +29,70 @@ BASE = Path(__file__).resolve().parent
 STATE_DIR = BASE / "state"
 STOP_FILE = BASE / "STOP"
 SYNC_SCRIPT = BASE / "sync_state.py"
+DASHBOARD = BASE / "dashboard_paper.html"
+PAGES_DIR = BASE / "pages_repo"
 
 
 def log(message: str) -> None:
     print(f"[cloud_runner] {message}", flush=True)
 
 
-def run_sync(reason: str) -> None:
-    """推送一次状态快照；失败只告警，不中断巡检。"""
+def publish_pages(pages_repo: str, token: str) -> None:
+    """把最新面板推到公开面板仓，Pages 会自动重新发布。
+
+    为什么必须周期性地做：Pages 面板如果只在 job 结束时发布，
+    5 小时轮次里页面就一直停在旧数据，前端会显示"监控数据已过期"。
+    """
+    if not pages_repo or not token:
+        return
+    if not DASHBOARD.exists():
+        return
+    try:
+        if PAGES_DIR.exists():
+            shutil.rmtree(PAGES_DIR, ignore_errors=True)
+        clone = subprocess.run(
+            ["git", "clone", "--depth", "1",
+             f"https://x-access-token:{token}@github.com/{pages_repo}.git", str(PAGES_DIR)],
+            cwd=str(BASE), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=180,
+        )
+        if clone.returncode != 0:
+            log(f"面板仓克隆失败：{(clone.stderr or '').strip()[:150]}")
+            return
+        shutil.copy2(DASHBOARD, PAGES_DIR / "index.html")
+        for cmd in (
+            ["git", "config", "user.name", "polymarket-quant-bot"],
+            ["git", "config", "user.email", "bot@users.noreply.github.com"],
+            ["git", "add", "index.html"],
+        ):
+            subprocess.run(cmd, cwd=str(PAGES_DIR), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=60)
+        commit = subprocess.run(
+            ["git", "commit", "-m", f"update paper dashboard {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}"],
+            cwd=str(PAGES_DIR), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=60,
+        )
+        if commit.returncode != 0:
+            # 没有变更也算成功
+            log("面板无变化，跳过提交")
+            return
+        push = subprocess.run(
+            ["git", "push", "origin", "HEAD:main"],
+            cwd=str(PAGES_DIR), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=180,
+        )
+        if push.returncode != 0:
+            log(f"面板推送失败：{(push.stderr or '').strip()[:150]}")
+        else:
+            log("面板已发布到 Pages")
+    except Exception as exc:
+        log(f"面板发布异常：{type(exc).__name__}: {exc}")
+    finally:
+        shutil.rmtree(PAGES_DIR, ignore_errors=True)
+
+
+def run_sync(reason: str, pages_repo: str = "", pages_token: str = "") -> None:
+    """推送一次状态快照 + 发布面板；失败只告警，不中断巡检。"""
     try:
         result = subprocess.run(
             [sys.executable, str(SYNC_SCRIPT), "push"],
@@ -53,12 +110,17 @@ def run_sync(reason: str) -> None:
     except Exception as exc:
         log(f"状态快照推送异常（{reason}）: {type(exc).__name__}: {exc}")
 
+    # 面板同步发布，保证 Pages 上的数据不会"过期"
+    publish_pages(pages_repo, pages_token)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--hours", type=float, default=5.0, help="本次连续运行时长（小时）")
     parser.add_argument("--interval", type=int, default=60, help="引擎轮询间隔（秒）")
     parser.add_argument("--push-interval", type=int, default=300, help="状态推送间隔（秒）")
+    parser.add_argument("--pages-repo", default="", help="公开面板仓（如 owner/repo）")
+    parser.add_argument("--pages-token", default="", help="面板仓写权限 token")
     args = parser.parse_args()
 
     total_seconds = max(60.0, args.hours * 3600)
@@ -122,7 +184,7 @@ def main() -> int:
                 break
 
             if now >= next_push:
-                run_sync("周期性")
+                run_sync("周期性", args.pages_repo, args.pages_token)
                 last_push_ok = True
                 next_push = time.time() + args.push_interval
 
@@ -134,7 +196,7 @@ def main() -> int:
                 STOP_FILE.unlink()
             except OSError:
                 pass
-        run_sync("收尾")
+        run_sync("收尾", args.pages_repo, args.pages_token)
         log("巡检结束")
 
     return 0
