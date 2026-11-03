@@ -133,12 +133,13 @@ jobs:
           git push
 
       - name: Trigger Next Round
-        # 自续跑：立刻触发下一轮，消掉 5 小时 cron 之间的间隙
+        # 自续跑：立刻触发下一轮，消掉 5 小时 cron 之间的间隙。
+        # 固定用 5 小时，不继承上一轮的 hours —— 否则测试用的短时长
+        # 会被一轮轮继承下去，正式巡检就退化成几分钟一轮。
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOURS: ${{ github.event.inputs.hours || '5' }}
         run: |
           sleep 20
-          gh workflow run polymarket_quant.yml --ref master -f hours="$HOURS" \
+          gh workflow run polymarket_quant.yml --ref master -f hours=5 \
             || echo "::warning::下一轮触发失败，等待 cron 兜底"
