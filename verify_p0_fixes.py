@@ -363,8 +363,9 @@ def test_reconciled_state_keys() -> None:
     import portfolio_reconciliation as pr
 
     sources = {
-        "eoa": "0x6A8373569a78E659Ce9Ca95b7A86359E9bFf722b",
-        "deposit_wallet": "0xaF56445fAe9Fe3eE8d74988ad873f3677F672467",
+        # 占位地址：真实钱包地址属于运行环境信息，不应硬编码进仓库
+        "eoa": "0x0000000000000000000000000000000000000001",
+        "deposit_wallet": "0x0000000000000000000000000000000000000002",
         "activity": [],
         "positions": [],
         "balances": {"deposit_wallet": 13.75, "eoa": 0.0},

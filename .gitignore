@@ -69,6 +69,18 @@ Thumbs.db
 # 文档留在本地供 AI 交接与溯源，不随仓库公开。
 Docs/
 
+# ===== 运行时产物，不进版本库 =====
+# 面板由引擎每轮巡检重新生成（quant_engine.py: dashboard_file().write_text()），
+# 内嵌钱包地址与代理出口 IP 等本机环境信息。
+# 公开版本由 Pages 面板仓托管，与本仓库无关。
+dashboard.html
+dashboard_hedge.html
+dashboard_maker.html
+dashboard_paper.html
+dashboard_reverse.html
+
 # 公开仓用不到的一次性运维脚本（仅本地网络异常时手动执行）
 sync_via_api.py
 remove_docs_from_public.py
+rewrite_history_no_docs.py
+api_push_file.py
