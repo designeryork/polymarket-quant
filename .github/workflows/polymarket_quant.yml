@@ -25,8 +25,10 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
+        # PAPER 模式懒加载链上模块，只需这三个第三方包，装得快、跑得稳
         run: |
-          pip install py-clob-client eth-account web3 python-dotenv requests numpy
+          python -m pip install --upgrade pip
+          pip install requests numpy python-dotenv
 
       - name: Run Single Quant Cycle (Fail-Closed)
         env:
@@ -49,9 +51,35 @@ jobs:
         run: |
           git config user.name "polymarket-quant-bot"
           git config user.email "bot@users.noreply.github.com"
+          # 先拉取远程最新（本地或其他运行可能推过），减少 push 冲突
+          git pull --rebase --autostash || true
           # state/ 与 logs/ 已被 .gitignore 排除，需用 -f 显式加入，
           # 否则 git add 会因 "ignored by one of your .gitignore files" 直接失败。
-          git add -f state/portfolio.json state/portfolio_paper.json dashboard.html || true
+          # 实盘侧
+          git add -f state/portfolio.json dashboard.html || true
+          # 纸盘侧（云端唯一写入方）：面板 + 组合 + 净值曲线 + 心跳 + 市场池
+          git add -f dashboard_paper.html \
+                    state/portfolio_paper.json \
+                    state/equity_history_paper.jsonl \
+                    state/heartbeat_paper.json \
+                    state/market_universe.json \
+                    state/scan_rotation.json || true
+          # 信号日志（排查云端为什么没下单时用）
           git add -f logs/signals_and_skips.jsonl || true
           git diff --staged --quiet || git commit -m "chore: update quant state [skip ci]"
+          git push || (git pull --rebase --autostash && git push) || echo "::warning::push 失败，本轮状态未回传，下轮重试"
+
+      - name: Publish Paper Dashboard to Pages Repo
+        # 在仓库 Secrets 里配置 PAGES_REPO（如 designeryork/polymarket-paper-dashboard）
+        # 和 PAGES_TOKEN（有该仓写权限的 token）后，此步骤自动生效；
+        # 不配置则静默跳过，不影响巡检。
+        if: ${{ secrets.PAGES_TOKEN != '' && secrets.PAGES_REPO != '' }}
+        run: |
+          git clone --depth 1 "https://x-access-token:${{ secrets.PAGES_TOKEN }}@github.com/${{ secrets.PAGES_REPO }}.git" pages_repo
+          cp dashboard_paper.html pages_repo/index.html
+          cd pages_repo
+          git config user.name "polymarket-quant-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add index.html
+          git diff --staged --quiet || git commit -m "update paper dashboard $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
