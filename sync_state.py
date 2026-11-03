@@ -126,25 +126,45 @@ def push(message: str = "state: snapshot") -> None:
         index_file = str(Path(tmp) / "index")
         env = dict(os.environ, GIT_INDEX_FILE=index_file)
 
-        # 1) 清空临时 index
-        subprocess.run(["git", "read-tree", "--empty"], cwd=str(BASE), env=env, check=True)
-        # 2) 把 workdir 里的文件加入临时 index（路径相对仓库根）
-        subprocess.run(
-            ["git", "--work-tree", str(work), "add", "-A", "."],
-            cwd=str(BASE),
-            env=env,
-            check=True,
+        # 显式指定作者/提交者身份：GitHub Actions 的 Runner 默认没有全局
+        # user.name/user.email，commit-tree 会因 "unable to auto-detect email" 报 128。
+        # 用环境变量而不是 git config，绕开配置文件差异，最稳。
+        env.update(
+            {
+                "GIT_AUTHOR_NAME": "polymarket-quant-bot",
+                "GIT_AUTHOR_EMAIL": "bot@users.noreply.github.com",
+                "GIT_COMMITTER_NAME": "polymarket-quant-bot",
+                "GIT_COMMITTER_EMAIL": "bot@users.noreply.github.com",
+            }
         )
+
+        def git(args, **kwargs):
+            """跑一条 git 命令；失败时把 stderr 打出来（否则只看到 exit code，难排查）。"""
+            result = subprocess.run(
+                ["git"] + args,
+                cwd=str(BASE),
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **kwargs,
+            )
+            if result.returncode != 0:
+                sys.stderr.write(
+                    f"[sync_state] git {' '.join(args[:2])} 失败 (exit {result.returncode}):\n"
+                    f"{(result.stderr or '').strip()[:500]}\n"
+                )
+                raise SystemExit(result.returncode)
+            return result
+
+        # 1) 清空临时 index
+        git(["read-tree", "--empty"])
+        # 2) 把 workdir 里的文件加入临时 index（路径相对仓库根）
+        git(["--work-tree", str(work), "add", "-A", "."])
         # 3) 写出 tree 与 commit（无父提交 = 孤立根提交，历史恒为 1 个）
-        tree = subprocess.run(
-            ["git", "write-tree"], cwd=str(BASE), env=env,
-            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
-        ).stdout.strip()
-        commit = subprocess.run(
-            ["git", "commit-tree", tree, "-m", message],
-            cwd=str(BASE), env=env,
-            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
-        ).stdout.strip()
+        tree = git(["write-tree"]).stdout.strip()
+        commit = git(["commit-tree", tree, "-m", message]).stdout.strip()
 
         # 4) 强制推送覆盖该分支
         result = subprocess.run(
@@ -156,7 +176,9 @@ def push(message: str = "state: snapshot") -> None:
             errors="replace",
         )
         if result.returncode != 0:
-            sys.stderr.write(f"[sync_state] push 失败: {result.stderr}\n")
+            sys.stderr.write(
+                f"[sync_state] push 失败 (exit {result.returncode}):\n{(result.stderr or '').strip()[:500]}\n"
+            )
             raise SystemExit(result.returncode)
         print(f"[sync_state] 已推送状态快照到 {BRANCH} 分支")
 
