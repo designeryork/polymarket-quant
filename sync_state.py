@@ -83,6 +83,25 @@ def slim_portfolio(src: Path) -> dict:
     return data
 
 
+def assert_not_blank(data: dict) -> None:
+    """护栏：拒绝推送"空白账本"。
+
+    快照分支是 --force 覆盖的，仓库里没有历史可回滚 ——
+    一旦把空白账本（净值回到初始 $10、无持仓、无平仓）推上去，
+    真实的持仓与净值曲线就永久丢失了。
+
+    典型触发场景：云端状态恢复失败 → 引擎以空白账本启动 → 推回云端。
+    """
+    equity = float(data.get("total_equity_usdc") or 0)
+    positions = len(data.get("open_positions") or [])
+    trades = len(data.get("closed_trades") or [])
+    if positions == 0 and trades == 0 and equity <= 10.0:
+        raise SystemExit(
+            "[sync_state] 护栏：账本是空白的（净值 $%.2f / 无持仓 / 无平仓），拒绝推送。"
+            "空白账本一旦覆盖快照分支，真实持仓无法找回。" % equity
+        )
+
+
 def slim_equity_history(src: Path) -> str:
     """只保留最近 N 行净值记录。"""
     if not src.exists():
@@ -101,8 +120,10 @@ def collect(workdir: Path) -> None:
         if rel == "state/portfolio_paper.json":
             if not src.exists():
                 continue
+            portfolio = slim_portfolio(src)
+            assert_not_blank(portfolio)
             dst.write_text(
-                json.dumps(slim_portfolio(src), ensure_ascii=False, indent=2),
+                json.dumps(portfolio, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
         elif rel == "state/equity_history_paper.jsonl":

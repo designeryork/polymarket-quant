@@ -781,8 +781,41 @@ def load_portfolio(risk: RiskEnvelope) -> Dict[str, Any]:
 
 
 def save_portfolio(state: Dict[str, Any]) -> None:
-    state["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    """写回账本。
+
+    防误覆盖护栏
+    ------------
+    如果磁盘上已有一份**有实质内容**的账本（有持仓 / 有已平仓记录），
+    而即将写入的新状态却是一份"空白账本"（净值 == 初始资金、无持仓、无平仓），
+    那么这次写入一定是误操作 —— 典型场景：云端恢复状态失败后引擎以
+    初始 $10 启动，然后把空白账本写回，把真实持仓和净值曲线清零。
+
+    这种清零是不可逆的（快照分支是 --force 覆盖，没有历史可回滚），
+    所以宁可**拒绝写入并报错**，也不能让它静默发生。
+    """
     target = portfolio_path()
+    if target.exists():
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            existing = None
+        if isinstance(existing, dict):
+            old_equity = float(existing.get("total_equity_usdc") or 0)
+            old_positions = len(existing.get("open_positions") or [])
+            old_trades = len(existing.get("closed_trades") or [])
+            new_equity = float(state.get("total_equity_usdc") or 0)
+            new_positions = len(state.get("open_positions") or [])
+            new_trades = len(state.get("closed_trades") or [])
+            old_has_content = old_positions > 0 or old_trades > 0
+            new_is_blank = new_positions == 0 and new_trades == 0
+            if old_has_content and new_is_blank:
+                raise RuntimeError(
+                    "[护栏] 拒绝用空白账本覆盖已有账本："
+                    f"磁盘现有 净值 ${old_equity:.2f} / 持仓 {old_positions} / 平仓 {old_trades}，"
+                    f"新状态 净值 ${new_equity:.2f} / 持仓 0 / 平仓 0。"
+                    "这通常意味着状态恢复失败，必须先修好恢复逻辑。"
+                )
+    state["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 
