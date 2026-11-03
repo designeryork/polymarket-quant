@@ -83,18 +83,14 @@ jobs:
           fi
 
       - name: Run Paper Loop
-        # --loop 每 60 秒一轮；--paper 强制纸盘账本；单实例锁保证只有一个引擎。
-        # 到点后用 STOP 文件优雅停机（引擎每轮开头检查），保证账本与净值曲线写完整。
+        # cloud_runner.py 负责三件事：
+        #   1. 后台跑 quant_engine.py --loop --interval 60（每分钟一轮）
+        #   2. 每 5 分钟推一次状态快照 —— 即使 job 中途崩溃也只丢几分钟数据
+        #   3. 到点创建 STOP 文件让引擎优雅停机，账本写完整后再退出
         env:
           RUN_HOURS: ${{ github.event.inputs.hours || '5' }}
         run: |
-          # 后台定时器：到点创建 STOP 文件，引擎下一轮开头读到后安全退出
-          ( sleep $(( ${RUN_HOURS:-5} * 3600 )) && touch STOP ) &
-          TIMER_PID=$!
-          python quant_engine.py --loop --interval "$ENGINE_INTERVAL" --paper || true
-          kill $TIMER_PID 2>/dev/null || true
-          rm -f STOP
-          echo "本轮巡检结束"
+          python cloud_runner.py --hours "$RUN_HOURS" --interval "$ENGINE_INTERVAL" --push-interval 300
 
       - name: Push State Snapshot
         # 状态推到 state-snapshot 分支（--force，历史恒为 1 个提交，仓库不膨胀）
