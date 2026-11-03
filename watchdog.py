@@ -29,6 +29,29 @@ if not PYTHON.exists():
 # 心跳超过该秒数视为卡死
 STALE_SECONDS = 900
 
+# 外部实例监护（阶段 A/B 对照）
+# --------------------------------------------------
+# 会话里启动的进程会被会话清理机制干掉（DETACHED_PROCESS 也拦不住），
+# 而本看门狗是用户双击 bat 启动的，不受会话影响 ——
+# 所以让它顺带看护 035 副本的 A/B 两组，对照实验才能连续跑。
+#
+# ⚠️ 只监控 + 用对方的启动器拉起，**不跨部署 kill 进程**。
+#    跨部署 terminate 是最危险的误操作（副本阶段 A 踩过）。
+#
+# 格式：{"dir": 部署目录, "tag": 实例标签, "launcher": 启动脚本名}
+EXTERNAL_INSTANCES = [
+    {
+        "dir": r"D:\2026_APPs by AI\035_polymarket_paper",
+        "tag": "net",
+        "launcher": "start_ab.py",
+    },
+    {
+        "dir": r"D:\2026_APPs by AI\035_polymarket_paper",
+        "tag": "gross",
+        "launcher": "start_ab.py",
+    },
+]
+
 
 def engine_processes(paper: bool = False):
     """返回指定模式的引擎进程（按命令行是否含 --paper 区分）。
@@ -146,13 +169,91 @@ def check_mode(paper: bool) -> dict:
     return {"mode": label, "action": "RESTARTED", "pid": pid, "previous_heartbeat_age_s": age}
 
 
+def check_external_instances() -> dict:
+    """监护**其它部署**里的实例（当前：035_polymarket_paper 的 A/B 对照组）。
+
+    为什么需要：会话里启动的进程会被会话清理机制干掉，
+    DETACHED_PROCESS 也拦不住。而 032 的看门狗是用户双击 bat 启动的，
+    不受会话影响 —— 所以让它顺带看护 A/B 两组，对照实验才能连续跑。
+
+    关键点：**只监控、不 kill**。跨部署的进程不属于本看门狗的职责范围，
+    只在「该实例彻底不在了」时用对应部署自己的启动脚本拉起。
+    """
+    base = os.path.normcase(os.path.abspath(str(BASE)))
+    results = {}
+    for spec in EXTERNAL_INSTANCES:
+        directory = Path(spec["dir"])
+        tag = spec["tag"]
+        if not directory.exists():
+            results[tag] = {"mode": f"external[{tag}]", "action": "SKIP", "detail": "目录不存在"}
+            continue
+        # 该部署自己的启动脚本（用它拉起，避免本看门狗跨部署拼命令行）
+        launcher = directory / spec.get("launcher", "")
+        rows = []
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                cmd = proc.info.get("cmdline") or []
+                if not any(str(item).endswith("quant_engine.py") for item in cmd):
+                    continue
+                if not any("--paper" in str(item) for item in cmd):
+                    continue
+                if os.path.normcase(os.path.abspath(proc.cwd())) != os.path.normcase(str(directory)):
+                    continue
+                parts = [str(i) for i in cmd]
+                found = ""
+                for idx, item in enumerate(parts):
+                    if item == "--instance-tag" and idx + 1 < len(parts):
+                        found = parts[idx + 1].strip()
+                if found == tag:
+                    rows.append(proc)
+            except Exception:
+                continue
+        if rows:
+            results[tag] = {"mode": f"external[{tag}]", "action": "HEALTHY", "pid": rows[0].pid}
+            continue
+        # 实例不在 → 用该部署自己的启动脚本拉起
+        # ⚠️ 用 `ensure` 而不是 `start`：只补缺失的那一组，
+        #    不重启另一组正在正常跑的实例（否则两组会反复被重启，数据作废）。
+        launcher = directory / spec.get("launcher", "")
+        action = spec.get("action", "ensure")
+        if not launcher.exists():
+            results[tag] = {
+                "mode": f"external[{tag}]", "action": "MISSING",
+                "detail": f"实例不在且找不到启动器 {launcher.name}",
+            }
+            continue
+        try:
+            subprocess.Popen(
+                [str(PYTHON), str(launcher), action],
+                cwd=str(directory),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=(
+                    getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+                    | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                ),
+                close_fds=True,
+            )
+            results[tag] = {"mode": f"external[{tag}]", "action": "RESTARTED_VIA_LAUNCHER"}
+        except Exception as exc:
+            results[tag] = {
+                "mode": f"external[{tag}]", "action": "RESTART_FAILED",
+                "detail": f"{type(exc).__name__}",
+            }
+    return results
+
+
 def check_once():
     if STOP_FILE.exists():
         return {"action": "STOPPED_BY_USER", "detail": "STOP present; watchdog will not restart"}
-    return {
+    out = {
         "live": check_mode(paper=False),
         "paper": check_mode(paper=True),
     }
+    if EXTERNAL_INSTANCES:
+        out["external"] = check_external_instances()
+    return out
 
 
 def main():
