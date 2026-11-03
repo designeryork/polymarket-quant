@@ -3910,5 +3910,5 @@ if __name__ == "__main__":
             print(
                 f"单次扫描完成 | 净值: ${st['total_equity_usdc']:.2f} | "
                 f"持仓: {len(st['open_positions'])}/4 | "
-                f"面板已生成: {dashboard_file(shown_key)}"
+                f"面板已生成: {dashboard_file(current_mode_key())}"
             )
