@@ -92,6 +92,11 @@ def start_watchdog() -> None:
 
 def ensure_paper_engine() -> None:
     """启动器拉起时，纸面引擎也要一起起来。"""
+    # 云端接管开关：state/PAPER_CLOUD 存在时，纸盘由 GitHub Actions 独占，
+    # 本地不再启动纸面引擎（删除该文件即交还本地运行）。
+    if (BASE / "state" / "PAPER_CLOUD").exists():
+        print("[云端接管] state/PAPER_CLOUD 存在，纸盘由 GitHub Actions 负责，本地不启动。")
+        return
     try:
         import watchdog
 

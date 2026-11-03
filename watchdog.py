@@ -249,8 +249,14 @@ def check_once():
         return {"action": "STOPPED_BY_USER", "detail": "STOP present; watchdog will not restart"}
     out = {
         "live": check_mode(paper=False),
-        "paper": check_mode(paper=True),
     }
+    # 云端接管开关：state/PAPER_CLOUD 存在时，纸盘由 GitHub Actions 独占，
+    # 本地看门狗不再守护纸盘引擎（删除该文件即交还本地运行）。
+    if (BASE / "state" / "PAPER_CLOUD").exists():
+        out["paper"] = {"mode": "paper", "action": "CLOUD_TAKEOVER",
+                        "detail": "state/PAPER_CLOUD 存在，纸盘由云端 Actions 负责"}
+    else:
+        out["paper"] = check_mode(paper=True)
     if EXTERNAL_INSTANCES:
         out["external"] = check_external_instances()
     return out
