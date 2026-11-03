@@ -31,7 +31,19 @@ STALE_SECONDS = 900
 
 
 def engine_processes(paper: bool = False):
-    """返回指定模式的引擎进程（按命令行是否含 --paper 区分）。"""
+    """返回指定模式的引擎进程（按命令行是否含 --paper 区分）。
+
+    跨部署隔离（重要）：只认工作目录在本 BASE 下的进程。
+    旧实现按命令行**全局扫描**，不区分部署目录 —— 于是：
+
+      1. 035_polymarket_paper 副本的纸面实例会被误认成 032 自己的纸面进程。
+         结果：032 的真纸面进程挂掉时，watchdog 看到「副本还活着」→ **不重启**；
+      2. 更危险：心跳超时时 watchdog 会把**别的部署**的引擎 terminate 掉。
+
+    同一个电脑上跑多个部署（032 实盘 + 035 纸盘副本）时，这两个后果都是真实故障。
+    psutil 的 proc.cwd() 在 Windows 上可读，用它做部署归属判定是可靠的。
+    """
+    base = os.path.normcase(os.path.abspath(str(BASE)))
     rows = []
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
@@ -41,8 +53,15 @@ def engine_processes(paper: bool = False):
             if not any(str(item).endswith("quant_engine.py") for item in cmd):
                 continue
             is_paper = any("--paper" in str(item) for item in cmd)
-            if is_paper == paper:
-                rows.append(proc)
+            if is_paper != paper:
+                continue
+            try:
+                cwd = os.path.normcase(os.path.abspath(proc.cwd()))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if cwd != base:
+                continue
+            rows.append(proc)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     return rows

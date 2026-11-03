@@ -825,11 +825,19 @@ class ExitDeferred(RuntimeError):
 
 
 def existing_engine_processes(paper: bool) -> list:
-    """列出同模式的其它引擎进程（不含自己）。用于启动时拒绝重复实例。"""
+    """列出同模式的其它引擎进程（不含自己）。用于启动时拒绝重复实例。
+
+    跨部署隔离（重要）：只认工作目录在本 BASE 下的进程。
+    旧实现按命令行**全局扫描**，不区分部署目录 ——
+    035_polymarket_paper 副本的实例会被误认成 032 自己的进程，
+    导致副本起不来（或者反过来，032 被副本挡住）。
+    psutil 的 proc.cwd() 在 Windows 上可读，用它做部署归属判定是可靠的。
+    """
     try:
         import psutil
     except Exception:
         return []
+    base = os.path.normcase(os.path.abspath(str(BASE_DIR)))
     rows = []
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
@@ -841,8 +849,16 @@ def existing_engine_processes(paper: bool) -> list:
             cmd = proc.info.get("cmdline") or []
             if not any(str(item).endswith("quant_engine.py") for item in cmd):
                 continue
-            if any("--paper" in str(item) for item in cmd) == paper:
-                rows.append(proc)
+            if any("--paper" in str(item) for item in cmd) != paper:
+                continue
+            # 只有工作目录与本进程一致才是同一份部署
+            try:
+                cwd = os.path.normcase(os.path.abspath(proc.cwd()))
+            except Exception:
+                continue
+            if cwd != base:
+                continue
+            rows.append(proc)
         except Exception:
             pass
     return rows
