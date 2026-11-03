@@ -61,3 +61,14 @@ Thumbs.db
 .workbuddy/
 # 个人 prompt 素材
 000-给ai的promt/
+
+# ===== 内部开发过程记录，不进公开仓 =====
+# Docs/ 是 47 篇实施记录，含钱包地址、代理出口 IP 等环境信息。
+# 自动化脚本（workflow 与所有 .py）完全不读它 —— 唯一引用是
+# quant_engine.py 里的一行注释 "实测 CLOB /book 连续 60 次全 200（Docs/007 第四节）"。
+# 文档留在本地供 AI 交接与溯源，不随仓库公开。
+Docs/
+
+# 公开仓用不到的一次性运维脚本（仅本地网络异常时手动执行）
+sync_via_api.py
+remove_docs_from_public.py
