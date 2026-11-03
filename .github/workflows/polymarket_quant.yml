@@ -37,6 +37,10 @@ concurrency:
 
 permissions:
   contents: write
+  # 自续跑需要用 GITHUB_TOKEN 触发 workflow_dispatch。
+  # 注意：workflow_dispatch 是"GITHUB_TOKEN 触发的 run 不再递归触发"的唯一例外，
+  # 所以自续跑链路是通的（push/pull_request 事件则会被 GitHub 拦截）。
+  actions: write
 
 jobs:
   paper-loop:
