@@ -130,7 +130,7 @@ def portfolio_path() -> Path:
 
 GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets"
 CLOB_HOST = os.getenv("CLOB_HOST", "https://clob.polymarket.com")
-DATA_API_TRADES_URL = "https://data-api.polymarket.com/trades"
+DATA_API_TRADES_URL = "https://data-api.polymarket.com/v2/trades"
 
 
 # ==========================================================

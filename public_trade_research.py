@@ -61,9 +61,10 @@ def fetch_public_trades(condition_id="", limit=100):
     params = {"limit": max(1, min(int(limit), 500))}
     if condition_id:
         params["market"] = condition_id
-    response = session.get("https://data-api.polymarket.com/trades", params=params, timeout=20)
+    response = session.get("https://data-api.polymarket.com/v2/trades", params=params, timeout=20)
     response.raise_for_status()
-    rows = response.json()
+    payload = response.json()
+    rows = payload.get("data") if isinstance(payload, dict) else payload
     if not isinstance(rows, list):
         raise ValueError("Public trades response is not a list")
     return rows

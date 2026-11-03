@@ -68,13 +68,42 @@ def build_session() -> requests.Session:
     return session
 
 
+def _normalise_api_row(endpoint: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    """把 Data API v2 字段映射回 v1 名称，避免改动上游全部解析逻辑。"""
+    if endpoint == "positions":
+        return {
+            **row,
+            "asset": row.get("token_id"),
+            "size": row.get("current_size", row.get("total_size")),
+            "avgPrice": row.get("avg_price"),
+            "curPrice": row.get("current_price"),
+            "currentValue": row.get("current_value"),
+            "conditionId": row.get("condition_id"),
+            "eventId": row.get("event_id"),
+            "endDate": row.get("end_date"),
+            "cashPnl": row.get("total_pnl"),
+            "oppositeTokenId": row.get("opposite_token_id"),
+        }
+    return {
+        **row,
+        "asset": row.get("token_id"),
+        "usdcSize": row.get("usdc_size"),
+        "conditionId": row.get("condition_id"),
+        "transactionHash": row.get("transaction_hash"),
+    }
+
+
 def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     limit = 500
     proxy_failed = False
-    for offset in range(0, 10000, limit):
-        params = {"user": wallet, "limit": limit, "offset": offset, "sizeThreshold": 0}
-        url = f"{DATA_API}/{endpoint}"
+    cursor: Optional[str] = None
+    # v2 是 cursor 分页：不接受 offset/sizeThreshold，next_cursor 为空即结束。
+    for _page in range(50):
+        params: Dict[str, Any] = {"user": wallet, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        url = f"{DATA_API}/v2/{endpoint}"
         try:
             # connect timeout 给小值（8s）：代理隧道偶发卡死时快速失败并重试，
             # 而不是把整轮 25 秒耗在一次卡住的 CONNECT 上。
@@ -112,13 +141,20 @@ def fetch_paginated(session: requests.Session, endpoint: str, wallet: str) -> Li
                 f"Retry-After={response.headers.get('Retry-After') or 'N/A'}"
             )
         response.raise_for_status()
-        batch = response.json()
+        payload = response.json()
+        if isinstance(payload, dict):
+            batch = payload.get("data")
+            pagination = payload.get("pagination") or {}
+        else:
+            batch = payload
+            pagination = {}
         if not isinstance(batch, list):
             raise ValueError(f"Unexpected {endpoint} response shape")
-        rows.extend(batch)
-        if len(batch) < limit:
+        rows.extend(_normalise_api_row(endpoint, row) for row in batch)
+        cursor = pagination.get("next_cursor")
+        if not cursor or not pagination.get("has_more"):
             return rows
-    raise ValueError(f"Too many {endpoint} rows; refusing an incomplete reconciliation")
+    raise ValueError(f"Too many {endpoint} pages; refusing an incomplete reconciliation")
 
 
 def _make_web3(rpc: str, proxy_url: Optional[str]) -> Web3:

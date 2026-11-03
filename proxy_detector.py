@@ -31,8 +31,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-# 验证用的只读接口：只取 1 条数据，负载极小，且不会产生任何交易动作
-PROBE_URL = "https://data-api.polymarket.com/positions?user=0x0000000000000000000000000000000000000000&limit=1"
+# 验证用的只读接口：CLOB /ok 最稳定，且是交易链路本身。
+# 旧的 Data API v1 探测地址已于 2026-11-03 被官方退役（410 "Data API v1 has been retired"），
+# 一度让所有代理被误判为不可用、引擎整轮拒绝运行。
+PROBE_URL = "https://clob.polymarket.com/ok"
 
 # 常见本地代理端口（按国内用户使用频率排序）
 COMMON_PROXY_PORTS = [7890, 7897, 7891, 10809, 1080, 10808, 8888, 8118, 1081, 33210]
