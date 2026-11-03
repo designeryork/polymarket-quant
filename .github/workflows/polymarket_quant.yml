@@ -10,6 +10,11 @@ concurrency:
   group: polymarket-quant-single-runner
   cancel-in-progress: false
 
+env:
+  # secrets 不能直接用在步骤的 if 里，借 job 级 env 转接：
+  # 两个 secret 都配置了才发布 Pages 面板
+  HAS_PAGES: ${{ secrets.PAGES_TOKEN != '' && secrets.PAGES_REPO != '' }}
+
 jobs:
   quant-scan:
     runs-on: ubuntu-latest
@@ -73,7 +78,7 @@ jobs:
         # 在仓库 Secrets 里配置 PAGES_REPO（如 designeryork/polymarket-paper-dashboard）
         # 和 PAGES_TOKEN（有该仓写权限的 token）后，此步骤自动生效；
         # 不配置则静默跳过，不影响巡检。
-        if: ${{ secrets.PAGES_TOKEN != '' && secrets.PAGES_REPO != '' }}
+        if: ${{ env.HAS_PAGES == 'true' }}
         run: |
           git clone --depth 1 "https://x-access-token:${{ secrets.PAGES_TOKEN }}@github.com/${{ secrets.PAGES_REPO }}.git" pages_repo
           cp dashboard_paper.html pages_repo/index.html
