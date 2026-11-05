@@ -236,6 +236,50 @@ def target_rows(account: Dict[str, Any]) -> str:
     return "".join(rows)
 
 
+REASON_LABEL = {"REDUCE": "减仓", "CLOSE": "平仓", "SETTLED": "结算"}
+
+
+def ours_closed_rows(account: Dict[str, Any]) -> str:
+    records = list(account.get("closed_trades") or [])[:15]
+    if not records:
+        return '<tr><td colspan="8" class="empty">暂无平仓记录</td></tr>'
+    rows = []
+    for r in records:
+        pnl = float(r.get("realized_pnl") or 0.0)
+        rows.append(f"""
+        <tr>
+          <td class="q-cell" title="{esc(r.get('title'))}">{esc(r.get('title'))}</td>
+          <td><span class="badge">{esc(r.get('outcome'))}</span></td>
+          <td>{float(r.get('shares') or 0):.2f}</td>
+          <td>{float(r.get('avg_price') or 0):.3f}</td>
+          <td>{float(r.get('exit_price') or 0):.3f}</td>
+          <td class="{pnl_class(pnl)}">${fmt_signed(pnl)}</td>
+          <td class="sub">{esc(REASON_LABEL.get(str(r.get('reason')), r.get('reason') or '—'))}</td>
+          <td class="sub">{fmt_ts(r.get('closed_at'))}</td>
+        </tr>""")
+    return "".join(rows)
+
+
+def target_closed_rows(account: Dict[str, Any]) -> str:
+    records = list(account.get("target_closed") or [])[:15]
+    if not records:
+        return '<tr><td colspan="7" class="empty">暂无对方平仓记录</td></tr>'
+    rows = []
+    for r in records:
+        pnl = float(r.get("realized_pnl") or 0.0)
+        rows.append(f"""
+        <tr>
+          <td class="q-cell" title="{esc(r.get('title'))}">{esc(r.get('title'))}</td>
+          <td><span class="badge">{esc(r.get('outcome'))}</span></td>
+          <td>{float(r.get('size') or 0):.2f}</td>
+          <td>{float(r.get('avg_price') or 0):.3f}</td>
+          <td>{float(r.get('exit_price') or 0):.3f}</td>
+          <td class="{pnl_class(pnl)}">${fmt_signed(pnl)}</td>
+          <td class="sub">{fmt_ts(r.get('closed_at'))}</td>
+        </tr>""")
+    return "".join(rows)
+
+
 def trader_column(trader: Dict[str, str], account: Dict[str, Any],
                   history: List[Dict[str, float]]) -> str:
     summary = engine.account_summary(account)
@@ -285,6 +329,26 @@ def trader_column(trader: Dict[str, str], account: Dict[str, Any],
         <table>
           <thead><tr><th>市场</th><th>方向</th><th>份额</th><th>均价</th><th>市值</th><th>浮盈亏</th></tr></thead>
           <tbody>{target_rows(account)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span>平仓记录</span><em>我方 · 最近 15 笔</em></div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>市场</th><th>方向</th><th>份额</th><th>均价</th><th>平仓价</th><th>已实现</th><th>方式</th><th>时间</th></tr></thead>
+          <tbody>{ours_closed_rows(account)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span>对手平仓记录</span><em>{esc(trader['name'])} 实盘 · 最近 15 笔</em></div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>市场</th><th>方向</th><th>份额</th><th>均价</th><th>平仓价</th><th>已实现</th><th>时间</th></tr></thead>
+          <tbody>{target_closed_rows(account)}</tbody>
         </table>
       </div>
     </div>

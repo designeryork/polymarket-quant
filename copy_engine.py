@@ -124,6 +124,10 @@ def empty_account(trader: Dict[str, str]) -> Dict[str, Any]:
         "last_poll_ok": False,
         "last_error": "",
         "target_equity_usd": 0.0,
+        # 复盘用：我方平仓记录 / 对方平仓记录（各自保留最近 MAX_CLOSED_KEEP 条）
+        "closed_trades": [],
+        "target_closed": [],
+        "target_closed_backfilled": False,
     }
 
 
@@ -148,7 +152,57 @@ def load_state() -> Dict[str, Any]:
     # 新增交易员时自动补齐，不破坏已有账本
     for trader in TRADERS:
         data["accounts"].setdefault(trader["id"], empty_account(trader))
+        account = data["accounts"][trader["id"]]
+        account.setdefault("closed_trades", [])
+        account.setdefault("target_closed", [])
+        account.setdefault("target_closed_backfilled", False)
+        # 老账本没有平仓列表：从事件流回填我方平仓记录（只做一次）
+        if not account["closed_trades"]:
+            account["closed_trades"] = _ours_closed_from_events(trader["id"])
     return data
+
+
+MAX_CLOSED_KEEP = 50
+
+
+def _ours_closed_from_events(trader_id: str) -> List[Dict[str, Any]]:
+    """从 events.jsonl 回填我方平仓记录（页面首次上线时用）。"""
+    if not EVENTS_FILE.exists():
+        return []
+    records: List[Dict[str, Any]] = []
+    try:
+        for line in EVENTS_FILE.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if event.get("trader") != trader_id:
+                continue
+            if event.get("type") not in ("COPY_SELL", "COPY_SETTLE"):
+                continue
+            shares = float(event.get("shares") or 0.0)
+            usd = float(event.get("usd") or 0.0)
+            realized = float(event.get("realized_pnl") or 0.0)
+            records.append({
+                "title": event.get("title") or "",
+                "outcome": event.get("outcome") or "",
+                "shares": round(shares, 4),
+                "avg_price": round((usd - realized) / shares, 4) if shares > 0 else 0.0,
+                "exit_price": round(usd / shares, 4) if shares > 0 else 0.0,
+                "realized_pnl": round(realized, 4),
+                "reason": event.get("reason") or "",
+                "closed_at": int(event.get("ts") or 0),
+            })
+    except Exception:
+        return []
+    return records[-MAX_CLOSED_KEEP:][::-1]
+
+
+def _append_closed(bucket: List[Dict[str, Any]], record: Dict[str, Any]) -> None:
+    bucket.insert(0, record)
+    del bucket[MAX_CLOSED_KEEP:]
 
 
 def save_state(state: Dict[str, Any]) -> None:
@@ -241,6 +295,84 @@ def _get(session: requests.Session, url: str, params: Optional[Dict[str, Any]] =
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code} {url}")
     return resp.json()
+
+
+def fetch_closed_for_condition(session: requests.Session, wallet: str,
+                               condition_id: str, token_id: str) -> Optional[Dict[str, Any]]:
+    """按 condition_id 查对方某个市场的已平仓记录（只取对应 token）。"""
+    if not condition_id:
+        return None
+    try:
+        payload = _get(session, f"{DATA_API}/v2/positions",
+                        {"user": wallet, "status": "closed",
+                         "condition_id": condition_id, "limit": 20})
+    except Exception:
+        return None
+    for item in payload.get("data") or []:
+        if str(item.get("token_id") or "") == token_id:
+            return item
+    return None
+
+
+def _target_closed_record(item: Dict[str, Any], fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """把对方已平仓的持仓记录转成页面用的精简结构。
+
+    退出价优先用「均价 + 已实现盈亏 / 总份额」反推；但对方如果反复进出，
+    realized_pnl 是多次往返的累计值，反推会超过 1（实测 3/150 条），
+    这时退回 current_price（结算单就是 1/0）。
+    """
+    size = float(item.get("total_size") or item.get("current_size") or 0.0)
+    avg = float(item.get("avg_price") or 0.0)
+    realized = float(item.get("realized_pnl") or 0.0)
+    implied = (avg + realized / size) if size > 0 else None
+    if implied is not None and 0.0 <= implied <= 1.0:
+        exit_price = implied
+    else:
+        exit_price = min(1.0, max(0.0, float(item.get("current_price") or 0.0)))
+    return {
+        "title": item.get("title") or (fallback or {}).get("title") or "",
+        "outcome": item.get("outcome") or (fallback or {}).get("outcome") or "",
+        "size": round(size or (fallback or {}).get("size", 0.0), 4),
+        "avg_price": round(avg, 4),
+        "exit_price": round(exit_price, 4),
+        "realized_pnl": round(realized, 4),
+        "closed_at": int(item.get("last_event_at") or 0),
+        "source": "api",
+    }
+
+
+def backfill_target_closed(session: requests.Session, account: Dict[str, Any],
+                           max_pages: int = 20) -> int:
+    """首次运行时回填对方最近 50 条平仓记录。
+
+    closed 接口默认按已实现盈亏排序（没有可用的排序参数），所以只能把最近的
+    若干页全部拉下来，再按 last_event_at 本地排序取最新。
+    """
+    if account.get("target_closed_backfilled"):
+        return 0
+    wallet = account["address"]
+    items: List[Dict[str, Any]] = []
+    cursor: Optional[str] = None
+    for _ in range(max_pages):
+        params: Dict[str, Any] = {"user": wallet, "status": "closed", "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            payload = _get(session, f"{DATA_API}/v2/positions", params)
+        except Exception:
+            break
+        items.extend(payload.get("data") or [])
+        pagination = payload.get("pagination") or {}
+        cursor = pagination.get("next_cursor")
+        if not pagination.get("has_more") or not cursor:
+            break
+    records = [_target_closed_record(item) for item in items if int(item.get("last_event_at") or 0) > 0]
+    records.sort(key=lambda r: r["closed_at"], reverse=True)
+    account["target_closed"] = records[:MAX_CLOSED_KEEP]
+    account["target_closed_backfilled"] = True
+    append_event({"type": "TARGET_CLOSED_BACKFILL", "trader": account["id"],
+                  "records": len(account["target_closed"]), "scanned": len(items)})
+    return len(account["target_closed"])
 
 
 def fetch_positions(session: requests.Session, wallet: str, status: str = "OPEN",
@@ -531,6 +663,16 @@ def _reduce_position(account: Dict[str, Any], trader_id: str, token: str,
     position["last_mark_at"] = utc_now()
     if position["shares"] <= 0:
         account["positions"].pop(token, None)
+    _append_closed(account.setdefault("closed_trades", []), {
+        "title": position.get("title") or "",
+        "outcome": position.get("outcome") or "",
+        "shares": round(sell_shares, 4),
+        "avg_price": round(cost_part / sell_shares, 4) if sell_shares > 0 else 0.0,
+        "exit_price": round(bid, 4),
+        "realized_pnl": round(proceeds - cost_part, 4),
+        "reason": "REDUCE",
+        "closed_at": ts_now(),
+    })
     append_event({
         "type": "COPY_SELL", "trader": trader_id, "token": token,
         "title": position.get("title") or "", "outcome": position.get("outcome") or "",
@@ -581,6 +723,16 @@ def _close_position(account: Dict[str, Any], trader_id: str, token: str,
     else:
         position["shares"] = remaining
         position["cost_usd"] = money(float(position["cost_usd"]) - cost)
+    _append_closed(account.setdefault("closed_trades", []), {
+        "title": position.get("title") or "",
+        "outcome": position.get("outcome") or "",
+        "shares": round(shares, 4),
+        "avg_price": round(cost / shares, 4) if shares > 0 else 0.0,
+        "exit_price": round(price, 4),
+        "realized_pnl": round(proceeds - cost, 4),
+        "reason": reason,
+        "closed_at": ts_now(),
+    })
     append_event({
         "type": kind, "trader": trader_id, "token": token,
         "title": position.get("title") or "", "outcome": position.get("outcome") or "",
@@ -595,6 +747,7 @@ def _target_snapshot(targets: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, 
     for token, item in targets.items():
         snapshot[token] = {
             "token_id": token,
+            "condition_id": item.get("condition_id") or "",
             "title": item.get("title") or "",
             "outcome": item.get("outcome") or "",
             "size": round(float(item.get("current_size") or 0.0), 4),
@@ -657,11 +810,41 @@ def reconcile_account(session: requests.Session, account: Dict[str, Any],
                                  target_size, fetch_book(session, token))
 
     # 2) 我们持有但目标已清空的仓位
+    previous_targets = account.get("target_positions") or {}
     for token in list((account.get("positions") or {}).keys()):
         if token in targets:
             continue
         position = account["positions"][token]
         _close_position(account, trader_id, token, position, session)
+
+    # 2.5) 对方平仓记录：上一轮还在、这一轮消失的仓位
+    for token, prev in previous_targets.items():
+        if token in targets:
+            continue
+        closed = fetch_closed_for_condition(
+            session, account["address"], prev.get("condition_id") or "", token
+        )
+        if closed:
+            record = _target_closed_record(closed, prev)
+        else:
+            size = float(prev.get("size") or 0.0)
+            avg = float(prev.get("avg_price") or 0.0)
+            exit_price = float(prev.get("current_price") or 0.0)
+            record = {
+                "title": prev.get("title") or "",
+                "outcome": prev.get("outcome") or "",
+                "size": round(size, 4),
+                "avg_price": round(avg, 4),
+                "exit_price": round(exit_price, 4),
+                "realized_pnl": round((exit_price - avg) * size, 4),
+                "closed_at": ts_now(),
+                "source": "snapshot",
+            }
+        _append_closed(account.setdefault("target_closed", []), record)
+        append_event({"type": "TARGET_CLOSED", "trader": trader_id, "token": token,
+                      "title": record["title"], "outcome": record["outcome"],
+                      "exit_price": record["exit_price"], "realized_pnl": record["realized_pnl"],
+                      "source": record.get("source")})
 
     # 3) 标记价：优先盘口买一；价差过大时用中间价（避免单边挂单把净值打穿），缺失则沿用上次
     for token, position in (account.get("positions") or {}).items():
@@ -703,6 +886,19 @@ def run_cycle(session: requests.Session, state: Dict[str, Any]) -> Dict[str, Any
             account["last_error"] = f"{type(exc).__name__}: {exc}"
             append_event({"type": "POLL_ERROR", "trader": trader["id"], "error": account["last_error"]})
             continue
+        # 安全闸：上一轮有 5 个以上持仓、这一轮却是空的 → 大概率是接口异常，
+        # 绝不能当成"全部平仓"去清空我们的镜像仓。
+        if not targets and len(account.get("target_positions") or {}) >= 5:
+            account["last_poll_ok"] = False
+            account["last_error"] = "positions returned empty unexpectedly"
+            append_event({"type": "POLL_ERROR", "trader": trader["id"], "error": account["last_error"]})
+            continue
+        # 首次运行回填对方最近平仓记录（只做一次）
+        if not account.get("target_closed_backfilled"):
+            try:
+                backfill_target_closed(session, account)
+            except Exception as exc:
+                append_event({"type": "BACKFILL_ERROR", "trader": trader["id"], "error": str(exc)[:200]})
         last_ok = account.get("last_poll_at")
         lag_sec = 0
         if last_ok:
