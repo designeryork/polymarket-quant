@@ -46,11 +46,6 @@ Thumbs.db
 *.bmp
 *.webp
 
-# 例外：Screen-shot/ 下的截图是文档的一部分（供后续 AI 交接阅读），需要入库
-!Screen-shot/
-!Screen-shot/*.png
-!Screen-shot/*.jpg
-
 # 纸盘验证副本是独立部署，不纳入本仓库
 035_polymarket_paper/
 
@@ -84,3 +79,20 @@ sync_via_api.py
 remove_docs_from_public.py
 rewrite_history_no_docs.py
 api_push_file.py
+audit_public_repo.py
+clean_public_repo.py
+
+# 云端跑不到、仅本地使用的脚本（Windows 无人值守、实盘开通、离线研究、回归测试）
+# 公开仓只保留 GitHub Actions 实际会执行的 14 个模块（见 README「架构」）。
+start_unattended.py
+watchdog.py
+status.py
+sync_dashboard.py
+activate_live.py
+setup_wallet.py
+calibration_report.py
+strategy_validation.py
+feature_missing_report.py
+public_trade_research.py
+verify_p0_fixes.py
+guard_no_leaks.py

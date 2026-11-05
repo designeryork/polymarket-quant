@@ -68,13 +68,12 @@ quant_engine.py        主引擎：扫描 → 特征 → 检验 → 风控 → �
 ├── rate_limiter.py    限流感知的重试层（429 读 Retry-After 退避）
 ├── market_circuit.py  市场熔断
 ├── single_instance.py 单实例锁（防止两个引擎同时写一个账本）
-├── watchdog.py        看门狗：拉起挂掉的引擎
 ├── order_ledger.py / hedge_ledger.py / reverse_ledger.py   各类账本
-└── portfolio_reconciliation.py   账本对账
+├── portfolio_reconciliation.py   账本对账
+└── trading_error_monitor.py      交易异常监控
 
 .github/workflows/     GitHub Actions 云端无人值守
 sync_state.py          状态快照同步（单提交分支，仓库不膨胀）
-sync_dashboard.py      本地面板自动同步
 ```
 
 ## 云端无人值守
