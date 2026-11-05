@@ -16,7 +16,7 @@
 * `/v2/positions?user=...&status=OPEN|closed` —— 持仓，含 title/outcome/current_size/
   avg_price/current_price/first_entry_at，cursor 分页；
 * `CLOB /book` —— 买卖一价；
-* `Gamma /markets` —— 市场结算结果（判定"卖出"还是"结算"）。
+* `CLOB /markets/{condition_id}` —— 市场是否结算、结算价（1/0）。
 """
 from __future__ import annotations
 
@@ -39,7 +39,6 @@ HEARTBEAT_FILE = STATE_DIR / "heartbeat.json"
 
 DATA_API = "https://data-api.polymarket.com"
 CLOB_HOST = os.getenv("CLOB_HOST", "https://clob.polymarket.com")
-GAMMA_MARKETS_URL = "https://gamma-api.polymarket.com/markets"
 
 STARTING_CASH_USD = 10.0
 CASH_FRACTION = 0.5          # 首次开仓用可用现金的 50%
@@ -285,27 +284,40 @@ def fetch_book(session: requests.Session, token_id: str) -> Optional[Dict[str, f
 
 
 def fetch_settlement_price(session: requests.Session, condition_id: str,
-                           outcome_index: int) -> Optional[float]:
-    """市场结算后从 Gamma 读结算价（1 或 0），读不到返回 None。"""
+                           outcome_index: int, outcome: str = "") -> Optional[float]:
+    """市场结算后取结算价（1 或 0）。
+
+    为什么不用 Gamma：实测 `gamma-api/markets?condition_ids=<hex>` 返回 0 条，
+    而 `?condition_id=` 会忽略参数、返回 20 个无关市场（差点拿错结算价）。
+    正确来源是 CLOB `GET /markets/<condition_id>`：closed=True，
+    tokens 里带 winner/price，且顺序与 outcome_index 一致。
+    """
+    if not condition_id:
+        return None
     try:
-        markets = _get(session, GAMMA_MARKETS_URL, {"condition_ids": condition_id})
+        market = _get(session, f"{CLOB_HOST}/markets/{condition_id}", timeout=(6.0, 15.0))
     except Exception:
         return None
-    if not markets:
+    if not isinstance(market, dict) or not market.get("closed"):
         return None
-    market = markets[0] if isinstance(markets, list) else markets
-    if not market.get("closed"):
+    tokens = market.get("tokens") or []
+    token: Optional[Dict[str, Any]] = None
+    if outcome:
+        for item in tokens:
+            if str(item.get("outcome") or "").lower() == outcome.lower():
+                token = item
+                break
+    if token is None and 0 <= outcome_index < len(tokens):
+        token = tokens[outcome_index]
+    if not token:
         return None
-    prices = market.get("outcomePrices")
-    if isinstance(prices, str):
-        try:
-            prices = json.loads(prices)
-        except Exception:
-            return None
-    if not isinstance(prices, list) or outcome_index >= len(prices):
-        return None
+    winner = token.get("winner")
+    if winner is True:
+        return 1.0
+    if winner is False:
+        return 0.0
     try:
-        return float(prices[outcome_index])
+        return float(token.get("price"))
     except (TypeError, ValueError):
         return None
 
@@ -521,7 +533,8 @@ def _close_position(account: Dict[str, Any], trader_id: str, token: str,
     else:
         # 盘口缺失（已结算）或双边价差过大：只有市场确实结算才按 1/0 结算
         settled = fetch_settlement_price(
-            session, position.get("condition_id") or "", int(position.get("outcome_index") or 0)
+            session, position.get("condition_id") or "",
+            int(position.get("outcome_index") or 0), position.get("outcome") or "",
         )
         if settled is None:
             reason = "CLOSE_SPREAD_TOO_WIDE" if book else "CLOSE_PRICE_UNAVAILABLE"
