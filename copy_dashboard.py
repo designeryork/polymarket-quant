@@ -2,24 +2,37 @@
 
 每栏包含：
 * KPI —— 账户价值 / 总盈亏 / 可用现金 / 持仓数
-* 净值走势折线图（读 state/copy/equity/*.jsonl）
+* 净值走势折线图：年 / 月 / 日 / 时四个窗口，鼠标悬停显示时间与数值
 * 当前持仓明细（我们的镜像仓）
 * 对手持仓明细（对方真实持仓，用于对照）
+
+三栏宽度可拖拽调整（分隔条），宽度存 localStorage；双击分隔条复位。
 """
 from __future__ import annotations
 
 import html as _html
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import copy_engine as engine
 
 BASE = Path(__file__).resolve().parent
 OUT_FILE = BASE / "copy.html"
 PAGES_URL = os.getenv("PAGES_URL", "https://designeryork.github.io/polymarket-paper-dashboard")
+
+# 时间窗口：(键, 秒数)。与主面板一致：看最近多久，不是把全部历史聚合
+WINDOWS: Tuple[Tuple[str, int], ...] = (
+    ("year", 365 * 86400),
+    ("month", 30 * 86400),
+    ("day", 86400),
+    ("hour", 2 * 3600),
+)
+WINDOW_LABEL = {"year": "年", "month": "月", "day": "日", "hour": "时"}
+MAX_POINTS = 150
 
 
 def esc(value: Any) -> str:
@@ -46,53 +59,133 @@ def pnl_class(value: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 折线图
+# 净值窗口与聚合
 # ---------------------------------------------------------------------------
-def equity_chart(points: List[Dict[str, float]], start_value: float) -> str:
-    width, height = 360, 110
-    pad_l, pad_r, pad_t, pad_b = 8, 8, 10, 16
+def window_points(points: List[Dict[str, float]], seconds: int,
+                  now: Optional[int] = None) -> List[Dict[str, float]]:
+    """取最近 seconds 秒内的点；窗口内点数超过 MAX_POINTS 时按时间桶聚合。"""
+    now = int(now or time.time())
+    cutoff = now - seconds
+    subset = [p for p in points if int(p.get("t") or 0) >= cutoff]
+    if not subset:
+        subset = points[-1:] if points else []
+    if len(subset) <= MAX_POINTS:
+        return subset
+    step = len(subset) / float(MAX_POINTS)
+    sampled = []
+    for i in range(MAX_POINTS):
+        bucket = subset[int(i * step): max(int(i * step) + 1, int((i + 1) * step))]
+        if bucket:
+            sampled.append(bucket[-1])
+    return sampled
+
+
+# ---------------------------------------------------------------------------
+# 折线图（内嵌 SVG，无外部依赖）
+# ---------------------------------------------------------------------------
+W, H = 400, 130
+PAD_L, PAD_R, PAD_T, PAD_B = 10, 10, 12, 18
+
+
+def _x_at(i: int, n: int) -> float:
+    if n <= 1:
+        return (W - PAD_L - PAD_R) / 2 + PAD_L
+    return PAD_L + i * (W - PAD_L - PAD_R) / (n - 1)
+
+
+def _y_at(v: float, lo: float, hi: float) -> float:
+    return PAD_T + (hi - v) / max(1e-9, hi - lo) * (H - PAD_T - PAD_B)
+
+
+def chart_view(trader_id: str, gran: str, points: List[Dict[str, float]],
+               start_value: float, active: bool) -> str:
     values = [float(p.get("e") or 0.0) for p in points]
     if not values:
-        return '<div class="chart-empty">暂无净值数据（等待第一轮巡检）</div>'
-    lo, hi = min(values + [start_value]), max(values + [start_value])
+        return (f'<div class="chart-view" data-gran="{gran}"'
+                f'{" hidden" if not active else ""}><div class="chart-empty">暂无净值数据</div></div>')
+
+    lo = min(values + [start_value])
+    hi = max(values + [start_value])
     if abs(hi - lo) < 1e-6:
         lo -= 0.1
         hi += 0.1
     span = hi - lo
-    lo -= span * 0.08
-    hi += span * 0.08
+    lo -= span * 0.06
+    hi += span * 0.06
+
     n = len(values)
-
-    def x_at(i: int) -> float:
-        if n == 1:
-            return (width - pad_l - pad_r) / 2 + pad_l
-        return pad_l + i * (width - pad_l - pad_r) / (n - 1)
-
-    def y_at(v: float) -> float:
-        return pad_t + (hi - v) / (hi - lo) * (height - pad_t - pad_b)
-
-    coords = [(x_at(i), y_at(v)) for i, v in enumerate(values)]
+    coords = [(_x_at(i, n), _y_at(v, lo, hi)) for i, v in enumerate(values)]
     line = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
-    area = f"{pad_l},{height - pad_b} " + line + f" {coords[-1][0]:.1f},{height - pad_b}"
-    rising = values[-1] >= values[0]
+    area = f"{PAD_L},{H - PAD_B} " + line + f" {coords[-1][0]:.1f},{H - PAD_B}"
+    # 颜色以"最后一笔 vs 本金"为准，和 KPI 的总盈亏口径一致
+    rising = values[-1] >= start_value
     stroke = "#34d399" if rising else "#fb7185"
-    base_y = y_at(start_value)
+    gid = f"g{abs(hash((trader_id, gran))) % 100000}"
+    base_y = _y_at(start_value, lo, hi)
+    dots = ""
+    if n <= 80:
+        dots = "".join(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.7" fill="{stroke}" opacity=".85"/>'
+                       for x, y in coords)
+    ticks = ""
+    for k in range(4):
+        val = lo + (hi - lo) * (k / 3)
+        yy = _y_at(val, lo, hi)
+        ticks += (f'<line x1="{PAD_L}" y1="{yy:.1f}" x2="{W - PAD_R}" y2="{yy:.1f}" '
+                  f'stroke="#334155" stroke-width=".6"/>')
+
+    xs = sorted({0, n // 2, n - 1}) if n > 1 else [0]
+    labels = "".join(
+        f'<span>{fmt_ts(points[i].get("t"), with_date=(gran in ("year", "month", "day")))}</span>'
+        for i in xs
+    )
     return f"""
-    <svg class="chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" aria-label="净值走势">
-      <defs>
-        <linearGradient id="g{id(points) % 100000}" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="{stroke}" stop-opacity="0.28"/>
+    <div class="chart-view" data-gran="{gran}"{'' if active else ' hidden'}>
+      <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" aria-label="净值走势">
+        <defs><linearGradient id="{gid}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="{stroke}" stop-opacity=".26"/>
           <stop offset="100%" stop-color="{stroke}" stop-opacity="0"/>
-        </linearGradient>
-      </defs>
-      <line x1="{pad_l}" y1="{base_y:.1f}" x2="{width - pad_r}" y2="{base_y:.1f}"
-            stroke="#334155" stroke-width="1" stroke-dasharray="3 3"/>
-      <polygon points="{area}" fill="url(#g{id(points) % 100000})"/>
-      <polyline points="{line}" fill="none" stroke="{stroke}" stroke-width="1.8"
-                stroke-linejoin="round" stroke-linecap="round"/>
-    </svg>
-    <div class="chart-axis"><span>${lo:.2f}</span><span>本金 $10.00</span><span>${hi:.2f}</span></div>
-    """
+        </linearGradient></defs>
+        {ticks}
+        <line x1="{PAD_L}" y1="{base_y:.1f}" x2="{W - PAD_R}" y2="{base_y:.1f}"
+              stroke="#64748b" stroke-width=".8" stroke-dasharray="3 3"/>
+        <polygon points="{area}" fill="url(#{gid})"/>
+        <polyline points="{line}" fill="none" stroke="{stroke}" stroke-width="1.6"
+                  stroke-linejoin="round" stroke-linecap="round"/>
+        {dots}
+      </svg>
+      <div class="chart-axis">{labels}</div>
+      <div class="chart-range"><span>${lo:.2f}</span><span>本金 ${start_value:.2f}</span><span>${hi:.2f}</span></div>
+    </div>"""
+
+
+def chart_block(trader_id: str, history: List[Dict[str, float]],
+                start_value: float) -> str:
+    now = int(time.time())
+    views = "".join(
+        chart_view(trader_id, gran, window_points(history, seconds, now), start_value, gran == "hour")
+        for gran, seconds in WINDOWS
+    )
+    tabs = "".join(
+        f'<button class="gran{" active" if gran == "hour" else ""}" data-gran="{gran}">{WINDOW_LABEL[gran]}</button>'
+        for gran, _ in WINDOWS
+    )
+    return f"""
+      <div class="chart-box" data-trader="{esc(trader_id)}">
+        <div class="card-title"><span>净值走势</span><span class="gran-tabs">{tabs}</span></div>
+        {views}
+      </div>"""
+
+
+def chart_data(histories: Dict[str, List[Dict[str, float]]]) -> Dict[str, List[List[float]]]:
+    """给前端悬停用的点集：{"trader|gran": [[ts, value], ...]}"""
+    now = int(time.time())
+    out: Dict[str, List[List[float]]] = {}
+    for trader_id, history in histories.items():
+        for gran, seconds in WINDOWS:
+            pts = window_points(history, seconds, now)
+            out[f"{trader_id}|{gran}"] = [[int(p.get("t") or 0), round(float(p.get("e") or 0.0), 4)]
+                                          for p in pts]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +248,7 @@ def trader_column(trader: Dict[str, str], account: Dict[str, Any],
     last_poll = account.get("last_poll_at") or "—"
     ok = account.get("last_poll_ok")
     status = '<span class="dot ok"></span>正常' if ok else '<span class="dot bad"></span>异常'
+    start = float(account.get("starting_cash_usd") or 10.0)
 
     return f"""
   <section class="trader">
@@ -167,16 +261,13 @@ def trader_column(trader: Dict[str, str], account: Dict[str, Any],
     </header>
 
     <div class="kpis">
-      <div class="kpi"><label>账户价值</label><b>${equity:.2f}</b><i>本金 $10.00</i></div>
+      <div class="kpi"><label>账户价值</label><b>${equity:.2f}</b><i>本金 ${start:.2f}</i></div>
       <div class="kpi"><label>总盈亏</label><b class="{pnl_class(pnl)}">${fmt_signed(pnl)}</b><i class="{pnl_class(pnl)}">{fmt_signed(pct, 1)}%</i></div>
       <div class="kpi"><label>可用现金</label><b>${cash:.2f}</b><i>现金比例 {cash / max(1e-9, equity) * 100:.0f}%</i></div>
       <div class="kpi"><label>持仓</label><b>{count}</b><i>对方 {target_count} 个</i></div>
     </div>
 
-    <div class="card">
-      <div class="card-title"><span>净值走势</span><em>最近 3 天</em></div>
-      {equity_chart(history, account.get('starting_cash_usd') or 10.0)}
-    </div>
+    <div class="card">{chart_block(trader['id'], history, start)}</div>
 
     <div class="card">
       <div class="card-title"><span>当前持仓明细</span><em>跟单仓 · 买一计价</em></div>
@@ -226,19 +317,32 @@ a { color: var(--accent); text-decoration: none; }
 .tabs a.active { background: #1d2b3d; color: var(--text); }
 .tabs a:hover { color: var(--text); }
 .meta { color: var(--faint); font-size: 10px; text-align: right; line-height: 1.6; }
-.grid {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px; padding: 16px 20px 28px; align-items: start;
-}
-@media (max-width: 1180px) { .grid { grid-template-columns: 1fr; } }
+.grid { display: flex; gap: 0; padding: 16px 20px 28px; align-items: flex-start; overflow-x: auto; }
 .trader {
+  flex: 1 1 0; min-width: 300px;
   background: linear-gradient(180deg, rgba(22,32,45,.85), rgba(17,26,37,.85));
   border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-width: 0;
+}
+.splitter {
+  flex: 0 0 12px; align-self: stretch; cursor: col-resize; position: relative;
+  border-radius: 6px; margin: 0 2px; touch-action: none;
+}
+.splitter::after {
+  content: ""; position: absolute; left: 5px; top: 50%; transform: translateY(-50%);
+  width: 2px; height: 46px; border-radius: 2px;
+  background: repeating-linear-gradient(180deg, #3a4b60 0 4px, transparent 4px 8px);
+  transition: background .15s ease;
+}
+.splitter:hover::after { background: repeating-linear-gradient(180deg, var(--accent) 0 4px, transparent 4px 8px); }
+@media (max-width: 1180px) {
+  .grid { flex-direction: column; gap: 14px; }
+  .splitter { display: none; }
+  .trader { flex: 1 1 auto !important; width: 100%; }
 }
 .trader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .who h2 { margin: 0 0 3px; font-size: 15px; }
 .who a { font-size: 10px; color: var(--faint); }
-.poll { color: var(--muted); font-size: 9px; text-align: right; line-height: 1.8; }
+.poll { color: var(--muted); font-size: 9px; text-align: right; line-height: 1.8; white-space: nowrap; }
 .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
 .dot.ok { background: var(--green); }
 .dot.bad { background: var(--red); }
@@ -248,13 +352,20 @@ a { color: var(--accent); text-decoration: none; }
 .kpi b { display: block; font-size: 17px; font-weight: 700; margin: 2px 0; font-variant-numeric: tabular-nums; }
 .kpi i { display: block; color: var(--faint); font-size: 9px; font-style: normal; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-top: 10px; overflow: hidden; }
-.card-title { display: flex; justify-content: space-between; align-items: baseline; padding: 9px 10px 7px; }
+.card-title { display: flex; justify-content: space-between; align-items: center; padding: 9px 10px 7px; gap: 8px; }
 .card-title span { font-size: 11px; font-weight: 650; }
-.card-title em { color: var(--faint); font-size: 9px; font-style: normal; }
+.card-title em { color: var(--faint); font-size: 9px; font-style: normal; white-space: nowrap; }
+.gran-tabs { display: inline-flex; gap: 2px; padding: 2px; background: var(--raised); border-radius: 7px; }
+.gran { appearance: none; border: 0; background: transparent; color: var(--muted); font-family: inherit;
+        font-size: 9px; line-height: 1; padding: 4px 7px; border-radius: 5px; cursor: pointer; }
+.gran.active { background: #1d2b3d; color: var(--text); }
+.chart-view { position: relative; padding: 0 8px 6px; cursor: crosshair; }
+.chart-view[hidden] { display: none; }
+.chart-view svg { width: 100%; height: 128px; display: block; }
+.chart-empty { padding: 30px 10px; text-align: center; color: var(--faint); font-size: 10px; }
+.chart-axis { display: flex; justify-content: space-between; color: var(--faint); font-size: 9px; padding: 0 2px; }
+.chart-range { display: flex; justify-content: space-between; color: #4d5d70; font-size: 9px; padding: 2px 2px 0; }
 .scroll { max-height: 210px; overflow: auto; }
-.chart { width: 100%; height: 110px; display: block; padding: 0 8px; }
-.chart-empty { padding: 26px 10px; text-align: center; color: var(--faint); font-size: 10px; }
-.chart-axis { display: flex; justify-content: space-between; padding: 0 10px 8px; color: var(--faint); font-size: 9px; }
 table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 10px; }
 th, td { padding: 6px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid rgba(35,48,66,.7); }
 th { position: sticky; top: 0; background: var(--raised); color: var(--muted); font-size: 9px; z-index: 1; }
@@ -266,18 +377,117 @@ td.empty { text-align: center; color: var(--faint); padding: 18px 8px; white-spa
 .neg { color: var(--red); }
 .flat { color: var(--muted); }
 .sub { color: var(--faint); font-size: 9px; }
+.chart-tip {
+  position: fixed; z-index: 50; pointer-events: none; padding: 7px 10px;
+  background: #0d1724; border: 1px solid #2a3b50; border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35); font-size: 11px; line-height: 1.5;
+  transform: translate(12px, -50%);
+}
+.chart-tip b { display: block; color: var(--accent); font-size: 13px; }
+.chart-tip span { color: var(--muted); font-size: 10px; }
 footer { padding: 0 20px 24px; color: var(--faint); font-size: 9px; }
+"""
+
+JS = """
+(() => {
+  const chartData = JSON.parse(document.getElementById('chart-data').textContent || '{}');
+  const tip = document.getElementById('chart-tip');
+
+  document.querySelectorAll('.chart-box').forEach((box) => {
+    const trader = box.dataset.trader;
+    const buttons = box.querySelectorAll('.gran');
+    const views = box.querySelectorAll('.chart-view');
+    buttons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        buttons.forEach((b) => b.classList.toggle('active', b === btn));
+        views.forEach((v) => { v.hidden = v.dataset.gran !== btn.dataset.gran; });
+      });
+    });
+
+    views.forEach((view) => {
+      const pts = chartData[trader + '|' + view.dataset.gran] || [];
+      const svg = view.querySelector('svg');
+      if (!svg) return;
+      const padL = 10, padR = 10, boxW = 400;
+      view.addEventListener('mousemove', (ev) => {
+        if (!pts.length) return;
+        const rect = view.getBoundingClientRect();
+        const x = ev.clientX - rect.left;
+        let best = 0, bestD = Infinity;
+        pts.forEach((p, i) => {
+          const frac = pts.length === 1 ? 0.5 :
+            (padL + i * (boxW - padL - padR) / (pts.length - 1)) / boxW;
+          const px = frac * rect.width;
+          const d = Math.abs(px - x);
+          if (d < bestD) { bestD = d; best = i; }
+        });
+        const [ts, val] = pts[best];
+        const d = new Date(ts * 1000);
+        const pad = (n) => String(n).padStart(2, '0');
+        const when = d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate())
+          + ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + ' UTC';
+        tip.innerHTML = '<b>$' + Number(val).toFixed(2) + '</b><span>' + when + '</span>';
+        tip.hidden = false;
+        tip.style.left = ev.clientX + 'px';
+        tip.style.top = ev.clientY + 'px';
+      });
+      view.addEventListener('mouseleave', () => { tip.hidden = true; });
+    });
+  });
+
+  // 分栏拖拽
+  const grid = document.querySelector('.grid');
+  const cols = Array.from(grid.querySelectorAll('.trader'));
+  const splitters = Array.from(grid.querySelectorAll('.splitter'));
+  const KEY = 'copy-dash-widths';
+  const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+  if (Array.isArray(saved) && saved.length === cols.length) {
+    cols.forEach((c, i) => { c.style.flex = '0 0 ' + saved[i] + 'px'; });
+  }
+  splitters.forEach((sp, idx) => {
+    sp.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      const left = cols[idx], right = cols[idx + 1];
+      const startX = ev.clientX;
+      const lw = left.getBoundingClientRect().width;
+      const rw = right.getBoundingClientRect().width;
+      document.body.style.userSelect = 'none';
+      const move = (e) => {
+        const dx = e.clientX - startX;
+        const nl = Math.max(280, lw + dx);
+        const nr = Math.max(280, rw - dx);
+        left.style.flex = '0 0 ' + nl + 'px';
+        right.style.flex = '0 0 ' + nr + 'px';
+      };
+      const up = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        document.body.style.userSelect = '';
+        const widths = cols.map((c) => Math.round(c.getBoundingClientRect().width));
+        localStorage.setItem(KEY, JSON.stringify(widths));
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+    sp.addEventListener('dblclick', () => {
+      localStorage.removeItem(KEY);
+      cols.forEach((c) => { c.style.flex = '1 1 0'; });
+    });
+  });
+})();
 """
 
 
 def render(state: Dict[str, Any], history: Optional[Dict[str, List[Dict[str, float]]]] = None,
            note: str = "") -> str:
-    history = history if history is not None else engine.load_equity_history()
-    columns = "".join(
-        trader_column(t, state["accounts"][t["id"]], history.get(t["id"], []))
-        for t in engine.TRADERS
-    )
+    history = history if history is not None else engine.load_equity_history(days=7, limit_per_account=None)
+    columns = ""
+    for index, trader in enumerate(engine.TRADERS):
+        if index:
+            columns += '<div class="splitter" role="separator" aria-orientation="vertical" title="拖动调整栏宽，双击复位"></div>'
+        columns += trader_column(trader, state["accounts"][trader["id"]], history.get(trader["id"], []))
     updated = state.get("updated_at") or "—"
+    data_json = json.dumps(chart_data(history), ensure_ascii=False, separators=(",", ":"))
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -301,10 +511,13 @@ def render(state: Dict[str, Any], history: Optional[Dict[str, List[Dict[str, flo
   </div>
 </header>
 <main class="grid">{columns}</main>
+<div id="chart-tip" class="chart-tip" hidden></div>
+<script type="application/json" id="chart-data">{data_json}</script>
 <footer>
   跟单口径：零回填；首次开仓用可用现金 50%；加仓按对方比例；部分减仓同比例；买用卖一、卖用买一。
   {esc(note)}
 </footer>
+<script>{JS}</script>
 </body>
 </html>
 """

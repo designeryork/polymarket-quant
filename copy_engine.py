@@ -184,8 +184,12 @@ def append_equity(state: Dict[str, Any], marks: Dict[str, float]) -> None:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def load_equity_history(days: int = 3, limit_per_account: int = 150) -> Dict[str, List[Dict[str, float]]]:
-    """读取最近若干天的净值曲线，按账户返回 [{"t":..., "e":...}]。"""
+def load_equity_history(days: int = 3,
+                        limit_per_account: Optional[int] = 150) -> Dict[str, List[Dict[str, float]]]:
+    """读取最近若干天的净值曲线，按账户返回 [{"t":..., "e":...}]。
+
+    limit_per_account=None 表示不抽样（页面按年/月/日/时窗口自己聚合）。
+    """
     out: Dict[str, List[Dict[str, float]]] = {t["id"]: [] for t in TRADERS}
     if not EQUITY_DIR.exists():
         return out
@@ -201,7 +205,7 @@ def load_equity_history(days: int = 3, limit_per_account: int = 150) -> Dict[str
         except Exception:
             continue
     for trader_id, points in out.items():
-        if len(points) > limit_per_account:
+        if limit_per_account and len(points) > limit_per_account:
             step = len(points) / float(limit_per_account)
             out[trader_id] = [points[min(int(i * step), len(points) - 1)] for i in range(limit_per_account)]
     return out
