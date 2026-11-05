@@ -360,6 +360,7 @@ CSS = """
   --bg: #0b1119; --panel: #111a25; --raised: #16202d; --line: #232f3e;
   --text: #d7e0ea; --muted: #7f90a5; --faint: #5b6b7f;
   --green: #34d399; --red: #fb7185; --accent: #7dd3fc;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body {
@@ -429,7 +430,18 @@ a { color: var(--accent); text-decoration: none; }
 .chart-empty { padding: 30px 10px; text-align: center; color: var(--faint); font-size: 10px; }
 .chart-axis { display: flex; justify-content: space-between; color: var(--faint); font-size: 9px; padding: 0 2px; }
 .chart-range { display: flex; justify-content: space-between; color: #4d5d70; font-size: 9px; padding: 2px 2px 0; }
-.scroll { max-height: 210px; overflow: auto; }
+.scroll { max-height: 210px; overflow: auto; scrollbar-width: thin; scrollbar-color: #2b3a4d transparent; }
+.scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll::-webkit-scrollbar-track { background: transparent; }
+.scroll::-webkit-scrollbar-thumb { background: #2b3a4d; border: 2px solid var(--panel); border-radius: 8px; }
+.scroll::-webkit-scrollbar-thumb:hover { background: #3b4f66; }
+.scroll::-webkit-scrollbar-corner { background: transparent; }
+/* 整页滚动条也用同一套深色，避免默认亮灰条 */
+html { scrollbar-width: thin; scrollbar-color: #2b3a4d transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2b3a4d; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #3b4f66; }
 table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 10px; }
 th, td { padding: 6px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid rgba(35,48,66,.7); }
 th { position: sticky; top: 0; background: var(--raised); color: var(--muted); font-size: 9px; z-index: 1; }
