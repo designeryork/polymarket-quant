@@ -52,6 +52,13 @@ MAX_SPREAD_REL = 0.10        # 入场：价差 / 卖一 > 10% 不买
 MAX_EXIT_SPREAD_REL = 0.15   # 出场：价差 / 卖一 > 15% 暂缓（下轮再试，结算走结算价）
 DEPTH_BAND = 0.02            # 深度统计范围：最优价 ±2%
 
+# 接盘保护（2026-11-05 复盘得出）
+# 财报类市场里，对方买入后 1~3 分钟价格就从 0.87 跳到 0.999；
+# 我们在 0.999 接盘只剩 0.1% 空间，而 1 个 tick 的价差就约 0.9% —— 结构性负期望。
+# 实测 Warby / Wendy's / Frontdoor 三笔：对方均价 0.873~0.964，我们全部买在 0.999。
+MAX_ENTRY_PRICE = 0.97       # 入场价上限：剩余空间不足 3% 不追
+MAX_ENTRY_SLIPPAGE = 0.05    # 相对对方持仓均价的滑点上限：贵 5 分以上视为接盘太晚
+
 TRADERS: Tuple[Dict[str, str], ...] = (
     {
         "id": "makeit99",
@@ -377,6 +384,15 @@ def _open_position(account: Dict[str, Any], trader_id: str,
         _record_skip(trader_id, token, target, "SPREAD_TOO_WIDE",
                      spread_pct=round(book["spread_rel"] * 100, 1))
         return
+    if ask >= MAX_ENTRY_PRICE:
+        _record_skip(trader_id, token, target, "PRICE_TOO_HIGH", price=round(ask, 4))
+        return
+    target_avg = float(target.get("avg_price") or 0.0)
+    if target_avg > 0 and ask - target_avg > MAX_ENTRY_SLIPPAGE:
+        _record_skip(trader_id, token, target, "LATE_ENTRY",
+                     price=round(ask, 4), target_avg=round(target_avg, 4),
+                     slippage=round(ask - target_avg, 4))
+        return
     cash = float(account.get("cash_usd") or 0.0)
     spend = min(cash * CASH_FRACTION, book["ask_depth_usdc"])
     if spend < MIN_ORDER_USD:
@@ -431,6 +447,14 @@ def _add_position(account: Dict[str, Any], trader_id: str,
                      spread_pct=round(book["spread_rel"] * 100, 1))
         return
     ask = book["best_ask"]
+    if ask >= MAX_ENTRY_PRICE:
+        _record_skip(trader_id, token, position, "PRICE_TOO_HIGH_ADD", price=round(ask, 4))
+        return
+    target_avg = float(target.get("avg_price") or 0.0)
+    if target_avg > 0 and ask - target_avg > MAX_ENTRY_SLIPPAGE:
+        _record_skip(trader_id, token, position, "LATE_ENTRY_ADD",
+                     price=round(ask, 4), target_avg=round(target_avg, 4))
+        return
     want_shares = floor_shares(delta_target * ratio)
     if want_shares <= 0:
         return
