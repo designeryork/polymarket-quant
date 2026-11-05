@@ -2942,7 +2942,7 @@ _MARKET_CATEGORY_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("电竞", (
         "esports", "e-sports", "league of legends", "dota", "cs2", "csgo", "cs:go",
         "counter-strike", "valorant", "overwatch", "starcraft", "starcraft ii",
-        "esl", "riot games", "电竞", "战队", "英雄联盟",
+        "esl", "riot games", "worlds", "电竞", "战队", "英雄联盟",
     )),
     ("体育", (
         "nba", "nfl", "mlb", "nhl", "wnba", "ncaa", "uefa", "fifa", "premier league",
@@ -2952,7 +2952,7 @@ _MARKET_CATEGORY_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "formula 1", "motogp", "olympics", "olympic", "medal", "championship",
         "league", "vs.", " vs ", "(-1.5", "(-2.5", "(-0.5", "(-3.5",
         "exact score", "any other score", "first goal", "both teams to score",
-        "total goals",
+        "total goals", "fc",
         "联赛", "比赛", "球队", "球员", "冠军", "世界杯", "奥运", "足球", "篮球", "网球", "高尔夫",
     )),
     ("天气", (
@@ -2963,14 +2963,15 @@ _MARKET_CATEGORY_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     )),
     ("加密", (
         "bitcoin", "btc", "ethereum", "eth", "solana", "doge", "xrp", "crypto",
-        "stablecoin", "defi", "nft", "比特币", "以太坊", "加密货币", "稳定币",
+        "stablecoin", "defi", "nft", "opensea", "fdv", "比特币", "以太坊", "加密货币", "稳定币",
     )),
     ("金融", (
         "federal reserve", "fed", "interest rate", "rate cut", "rate hike",
         "inflation", "cpi", "gdp", "unemployment", "jobs report", "recession",
         "nasdaq", "s&p", "s&p 500", "spx", "spy", "dow", "stock", "earnings",
         "treasury", "yield", "dollar", "oil price", "crude", "opec", "housing",
-        "etf", "利率", "降息", "加息", "通胀", "经济", "股市", "财报", "原油",
+        "etf", "gold", "xauusd", "silver", "commodity", "bank of england", "bps",
+        "利率", "降息", "加息", "通胀", "经济", "股市", "财报", "原油",
     )),
     ("科技", (
         "artificial intelligence", "openai", "chatgpt", "gpt", "anthropic", "claude",
@@ -2980,7 +2981,8 @@ _MARKET_CATEGORY_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     )),
     ("娱乐", (
         "movie", "film", "box office", "oscar", "grammy", "emmy", "album", "singer",
-        "song", "taylor swift", "celebrity", "netflix", "concert",
+        "song", "taylor swift", "celebrity", "netflix", "concert", "avengers",
+        "opening weekend", "person of the year",
         "电影", "票房", "奥斯卡", "专辑", "明星", "演唱会",
     )),
     ("政治", (
@@ -2992,6 +2994,7 @@ _MARKET_CATEGORY_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "taiwan", "hamas", "hezbollah", "putin", "trump", "biden", "netanyahu",
         "republican", "republicans", "democrat", "democratic", "supreme court",
         "immigration", "airspace", "ben gurion", "nomination", "seats", "canada",
+        "xi jinping",
         "选举", "总统", "首相", "议会", "政府", "制裁", "停火", "战争", "军事",
         "空袭", "条约", "外交", "关税",
     )),
@@ -3005,7 +3008,8 @@ def _compile_category_patterns() -> Tuple[Tuple[str, Tuple[Any, ...]], ...]:
         pats = []
         for word in words:
             if word.isascii() and re.fullmatch(r"[a-z0-9 ]+", word):
-                pats.append(re.compile(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])"))
+                # 允许复数：interest rate → interest rates, war → wars
+                pats.append(re.compile(rf"(?<![a-z0-9]){re.escape(word)}s?(?![a-z0-9])"))
             else:
                 pats.append(re.compile(re.escape(word)))
         compiled.append((name, tuple(pats)))
