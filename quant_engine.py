@@ -10,6 +10,7 @@ Polymarket 量化交易引擎：从公开成交到无人值守 (10U 专享版)
 import os
 import json
 import math
+import re
 import time
 import argparse
 import atexit
@@ -2927,6 +2928,119 @@ def bucket_equity_curve(points: List[Dict[str, Any]], granularity: str) -> List[
 # ==========================================================
 # 可视化 HTML 监控面板生成器 (双击即可在浏览器查看盈亏)
 # ==========================================================
+# ---------------------------------------------------------------------------
+# 市场分类：面板三张表（持仓 / 已平仓 / 风控门）都要标出问题属于哪个领域。
+# 规则按优先级排列：
+#   - 电竞在体育之前，避免 "esports world cup" 被判成体育；
+#   - 加密在金融之前，避免 "bitcoin ETF" 被判成金融；
+#   - 英文关键词按单词边界匹配，否则 Ukraine 里的 "rain" 会被判成天气。
+# 只做展示用，不参与任何交易决策。
+# ---------------------------------------------------------------------------
+MARKET_CATEGORIES = ("天气", "政治", "体育", "电竞", "加密", "金融", "科技", "娱乐", "其他")
+
+_MARKET_CATEGORY_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("电竞", (
+        "esports", "e-sports", "league of legends", "dota", "cs2", "csgo", "cs:go",
+        "counter-strike", "valorant", "overwatch", "starcraft", "starcraft ii",
+        "esl", "riot games", "电竞", "战队", "英雄联盟",
+    )),
+    ("体育", (
+        "nba", "nfl", "mlb", "nhl", "wnba", "ncaa", "uefa", "fifa", "premier league",
+        "la liga", "serie a", "bundesliga", "champions league", "world cup",
+        "super bowl", "playoff", "playoffs", "moneyline", "handicap", "over/under",
+        "o/u", "spread", "match", "tennis", "golf", "cricket", "boxing", "ufc",
+        "formula 1", "motogp", "olympics", "olympic", "medal", "championship",
+        "league", "vs.", " vs ", "(-1.5", "(-2.5", "(-0.5", "(-3.5",
+        "exact score", "any other score", "first goal", "both teams to score",
+        "total goals",
+        "联赛", "比赛", "球队", "球员", "冠军", "世界杯", "奥运", "足球", "篮球", "网球", "高尔夫",
+    )),
+    ("天气", (
+        "weather", "temperature", "degrees", "rain", "rainfall", "snow", "snowfall",
+        "hurricane", "typhoon", "storm", "tornado", "heat wave", "heatwave",
+        "climate", "humidity", "wind speed", "el niño", "la niña", "°c", "°f",
+        "天气", "气温", "温度", "降雨", "降雪", "台风", "飓风", "寒潮", "高温",
+    )),
+    ("加密", (
+        "bitcoin", "btc", "ethereum", "eth", "solana", "doge", "xrp", "crypto",
+        "stablecoin", "defi", "nft", "比特币", "以太坊", "加密货币", "稳定币",
+    )),
+    ("金融", (
+        "federal reserve", "fed", "interest rate", "rate cut", "rate hike",
+        "inflation", "cpi", "gdp", "unemployment", "jobs report", "recession",
+        "nasdaq", "s&p", "s&p 500", "spx", "spy", "dow", "stock", "earnings",
+        "treasury", "yield", "dollar", "oil price", "crude", "opec", "housing",
+        "etf", "利率", "降息", "加息", "通胀", "经济", "股市", "财报", "原油",
+    )),
+    ("科技", (
+        "artificial intelligence", "openai", "chatgpt", "gpt", "anthropic", "claude",
+        "google", "alphabet", "apple", "microsoft", "nvidia", "meta", "tesla",
+        "spacex", "starship", "iphone", "android", "tiktok", "twitter", "x.com",
+        "open source", "tweets", "人工智能", "大模型", "手机", "火箭", "卫星",
+    )),
+    ("娱乐", (
+        "movie", "film", "box office", "oscar", "grammy", "emmy", "album", "singer",
+        "song", "taylor swift", "celebrity", "netflix", "concert",
+        "电影", "票房", "奥斯卡", "专辑", "明星", "演唱会",
+    )),
+    ("政治", (
+        "election", "presidential", "president", "prime minister", "senate",
+        "congress", "parliament", "house seat", "governor", "mayor", "administration",
+        "sanction", "ceasefire", "war", "military", "invasion", "airstrike",
+        "missile", "nuclear", "treaty", "agreement", "summit", "nato", "tariff",
+        "israel", "israeli", "iran", "iranian", "ukraine", "russia", "china",
+        "taiwan", "hamas", "hezbollah", "putin", "trump", "biden", "netanyahu",
+        "republican", "republicans", "democrat", "democratic", "supreme court",
+        "immigration", "airspace", "ben gurion", "nomination", "seats", "canada",
+        "选举", "总统", "首相", "议会", "政府", "制裁", "停火", "战争", "军事",
+        "空袭", "条约", "外交", "关税",
+    )),
+)
+
+
+def _compile_category_patterns() -> Tuple[Tuple[str, Tuple[Any, ...]], ...]:
+    """英文单词用边界匹配（避免 Ukraine 命中 rain），其余按子串匹配。"""
+    compiled = []
+    for name, words in _MARKET_CATEGORY_RULES:
+        pats = []
+        for word in words:
+            if word.isascii() and re.fullmatch(r"[a-z0-9 ]+", word):
+                pats.append(re.compile(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])"))
+            else:
+                pats.append(re.compile(re.escape(word)))
+        compiled.append((name, tuple(pats)))
+    return tuple(compiled)
+
+
+_CATEGORY_PATTERNS = _compile_category_patterns()
+
+_CATEGORY_CSS_CLASS = {
+    "天气": "cat-weather",
+    "政治": "cat-politics",
+    "体育": "cat-sports",
+    "电竞": "cat-esports",
+    "加密": "cat-crypto",
+    "金融": "cat-finance",
+    "科技": "cat-tech",
+    "娱乐": "cat-ent",
+    "其他": "cat-other",
+}
+
+
+def market_category(question: Optional[str]) -> str:
+    """按市场问题文本归类，命中第一个规则就返回；都不命中归「其他」。"""
+    text = (question or "").lower()
+    for name, patterns in _CATEGORY_PATTERNS:
+        if any(pat.search(text) for pat in patterns):
+            return name
+    return "其他"
+
+
+def category_badge(question: Optional[str]) -> str:
+    name = market_category(question)
+    return f'<span class="cat {_CATEGORY_CSS_CLASS[name]}">{name}</span>'
+
+
 def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = None) -> None:
     from html import escape
 
@@ -2959,6 +3073,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
         open_rows += f"""
         <tr>
             <td><span class="badge badge-side">{p['outcome']}</span></td>
+            <td>{category_badge(p.get('market_question'))}</td>
             <td class="q-cell" title="{p['market_question']}">{p['market_question']}</td>
             <td>{entry_cell}</td>
             <td>{p['current_bid']:.3f} <span class="sub">(Ask {p['current_ask']:.3f})</span></td>
@@ -2971,7 +3086,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
         </tr>
         """
     if not open_rows:
-        open_rows = '<tr><td colspan="10" style="text-align:center;color:#94a3b8;padding:20px;">当前无持仓（风控门正在扫描符合 Logit 动量与优势阈值的盘口）</td></tr>'
+        open_rows = '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:20px;">当前无持仓（风控门正在扫描符合 Logit 动量与优势阈值的盘口）</td></tr>'
 
     # 挂单盘已改为"开仓即按卖一成交、跟随纸面平仓"；pending 只用于旧版遗留或现金不足。
     entry_head = "买入价 Ask"
@@ -2988,6 +3103,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
         closed_rows += f"""
         <tr>
             <td><span class="badge">{c['outcome']}</span></td>
+            <td>{category_badge(c.get('market_question'))}</td>
             <td class="q-cell">{c['market_question']}</td>
             <td>{c['entry_price']:.3f}</td>
             <td>{c['exit_price_bid']:.3f}</td>
@@ -2998,7 +3114,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
         </tr>
         """
     if not closed_rows:
-        closed_rows = '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:16px;">暂无已平仓历史（持仓达到止盈目标或触发 Logit 止损后自动记录在此）</td></tr>'
+        closed_rows = '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:16px;">暂无已平仓历史（持仓达到止盈目标或触发 Logit 止损后自动记录在此）</td></tr>'
 
     decision_rows = ""
     for d in state.get("recent_decisions", [])[:25]:
@@ -3013,6 +3129,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
             <td class="sub">{d['time']}</td>
             <td><span class="badge {b_cls}">{d['decision']}</span></td>
             <td><code>{d['reason_code']}</code></td>
+            <td>{category_badge(d.get('question'))}</td>
             <td class="q-cell">{d['question']}</td>
             <td>{d['detail']} <div class="sub">{m_str}</div></td>
         </tr>
@@ -3553,10 +3670,10 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
   th {{ position: sticky; top: 0; z-index: 2; background: var(--card-raised); color: #7f90a5; font-size: 10px; font-weight: 600; }}
   tbody tr:last-child td {{ border-bottom: 0; }}
   td .sub {{ display: inline; }}
-  .positions-table {{ min-width: 1180px; }}
+  .positions-table {{ min-width: 1250px; }}
   .orders-table {{ min-width: 900px; }}
-  .closed-table {{ min-width: 920px; }}
-  .signals-table {{ min-width: 760px; }}
+  .closed-table {{ min-width: 1000px; }}
+  .signals-table {{ min-width: 830px; }}
   .q-cell {{ max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
   .pos {{ color: var(--green); font-weight: 650; }}
   .neg {{ color: var(--red); font-weight: 650; }}
@@ -3570,6 +3687,20 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
   .badge-buy {{ background: rgba(52, 211, 153, .1); color: #6ee7b7; }}
   .badge-skip {{ background: rgba(132, 146, 166, .1); color: #9aaabc; }}
   .badge-error {{ background: rgba(251, 191, 36, .1); color: #fcd34d; }}
+  .cat {{
+    display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 5px;
+    font-size: 9px; font-weight: 700; line-height: 1.6; white-space: nowrap;
+    background: rgba(148, 163, 184, .12); color: #9aaabc;
+  }}
+  .cat-politics {{ background: rgba(96, 165, 250, .12); color: #93c5fd; }}
+  .cat-sports {{ background: rgba(52, 211, 153, .12); color: #6ee7b7; }}
+  .cat-esports {{ background: rgba(192, 132, 252, .14); color: #d8b4fe; }}
+  .cat-weather {{ background: rgba(34, 211, 238, .12); color: #67e8f9; }}
+  .cat-crypto {{ background: rgba(251, 191, 36, .12); color: #fcd34d; }}
+  .cat-finance {{ background: rgba(45, 212, 191, .12); color: #5eead4; }}
+  .cat-tech {{ background: rgba(129, 140, 248, .14); color: #a5b4fc; }}
+  .cat-ent {{ background: rgba(244, 114, 182, .12); color: #f9a8d4; }}
+  .cat-other {{ background: rgba(148, 163, 184, .1); color: #94a3b8; }}
   .error-panel {{ border-color: rgba(251, 191, 36, .25); }}
   .error-list {{ padding: 0 12px 10px; }}
   .error-item {{ border-bottom: 1px solid rgba(35, 48, 66, .7); }}
@@ -3723,7 +3854,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
       <div class="panel-note">{positions_note}</div>
       <div class="scroll-region" data-scroll-key="positions" tabindex="0" role="region" aria-label="当前持仓明细，可滚动">
         <table class="positions-table">
-          <thead><tr><th>方向</th><th>预测市场问题</th><th>{entry_head}</th><th>现买一价 Bid</th><th>模型概率 Edge</th><th>投入本金</th><th>清算市值</th><th>实时浮盈亏</th><th>建仓时间</th><th>盘口更新</th></tr></thead>
+          <thead><tr><th>方向</th><th>分类</th><th>预测市场问题</th><th>{entry_head}</th><th>现买一价 Bid</th><th>模型概率 Edge</th><th>投入本金</th><th>清算市值</th><th>实时浮盈亏</th><th>建仓时间</th><th>盘口更新</th></tr></thead>
           <tbody>{open_rows}</tbody>
         </table>
       </div>
@@ -3751,7 +3882,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
       </div>
       <div class="scroll-region" data-scroll-key="closed" tabindex="0" role="region" aria-label="已平仓历史记录，可滚动">
         <table class="closed-table">
-          <thead><tr><th>方向</th><th>市场</th><th>开仓价</th><th>平仓价 Bid</th><th>本金</th><th>已实现盈亏</th><th>平仓触发原因</th><th>平仓时间</th></tr></thead>
+          <thead><tr><th>方向</th><th>分类</th><th>市场</th><th>开仓价</th><th>平仓价 Bid</th><th>本金</th><th>已实现盈亏</th><th>平仓触发原因</th><th>平仓时间</th></tr></thead>
           <tbody>{closed_rows}</tbody>
         </table>
       </div>
@@ -3764,7 +3895,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
       </div>
       <div class="scroll-region" data-scroll-key="signals" tabindex="0" role="region" aria-label="风控与扫描日志，可滚动">
         <table class="signals-table">
-          <thead><tr><th>时间</th><th>动作</th><th>规则代码</th><th>市场</th><th>量化指标与原因明细</th></tr></thead>
+          <thead><tr><th>时间</th><th>动作</th><th>规则代码</th><th>分类</th><th>市场</th><th>量化指标与原因明细</th></tr></thead>
           <tbody>{decision_rows}</tbody>
         </table>
       </div>
