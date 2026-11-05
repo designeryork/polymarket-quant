@@ -1,7 +1,7 @@
 {
   "version": 1,
   "started_at": "2026-11-05T09:33:18+00:00",
-  "updated_at": "2026-11-05T12:39:21+00:00",
+  "updated_at": "2026-11-05T12:45:21+00:00",
   "accounts": {
     "makeit99": {
       "id": "makeit99",
@@ -80,7 +80,7 @@
         "96695573155149554288347465856855419739785879857877468658103900115310408533202": 3.1023
       },
       "baseline_at": "2026-11-05 09:33:19 UTC",
-      "last_poll_at": "2026-11-05 12:39:19 UTC",
+      "last_poll_at": "2026-11-05 12:45:19 UTC",
       "last_poll_ok": true,
       "last_error": "",
       "target_equity_usd": 3712.3705,
@@ -395,7 +395,7 @@
         "98490567499388093344859123375837030403637834178214242005080036347910920775847": 1653.7927
       },
       "baseline_at": "2026-11-05 09:33:19 UTC",
-      "last_poll_at": "2026-11-05 12:39:19 UTC",
+      "last_poll_at": "2026-11-05 12:45:19 UTC",
       "last_poll_ok": true,
       "last_error": "",
       "target_equity_usd": 19157.5306,
@@ -1708,10 +1708,10 @@
         "2142948285506077695096498341598672159464223074468931276310105532825810210121": 510.04
       },
       "baseline_at": "2026-11-05 09:33:21 UTC",
-      "last_poll_at": "2026-11-05 12:39:21 UTC",
+      "last_poll_at": "2026-11-05 12:45:21 UTC",
       "last_poll_ok": true,
       "last_error": "",
-      "target_equity_usd": 103417.9241,
+      "target_equity_usd": 103394.2254,
       "target_positions": {
         "19389166301388823009353528659838082515289587284309335761993116571669132485120": {
           "token_id": "19389166301388823009353528659838082515289587284309335761993116571669132485120",
@@ -1818,9 +1818,9 @@
           "outcome": "Yes",
           "size": 4262.1252,
           "avg_price": 0.4689,
-          "current_price": 0.3435,
-          "value_usd": 1464.04,
-          "unrealized_pnl": -534.48,
+          "current_price": 0.3365,
+          "value_usd": 1434.21,
+          "unrealized_pnl": -564.32,
           "first_entry_at": 1762555511
         },
         "106457173661711072800954463114296112322414039881870249204907915075846013240261": {
@@ -1829,9 +1829,9 @@
           "outcome": "No",
           "size": 1455.02,
           "avg_price": 0.9041,
-          "current_price": 0.9695,
-          "value_usd": 1410.64,
-          "unrealized_pnl": 95.1,
+          "current_price": 0.969,
+          "value_usd": 1409.91,
+          "unrealized_pnl": 94.38,
           "first_entry_at": 1786144345
         },
         "4873866473576781461673824094832289054970626936457051935930934423294253776723": {
@@ -1928,9 +1928,9 @@
           "outcome": "Yes",
           "size": 1302.5,
           "avg_price": 0.6852,
-          "current_price": 0.7515,
-          "value_usd": 978.83,
-          "unrealized_pnl": 86.35,
+          "current_price": 0.751,
+          "value_usd": 978.18,
+          "unrealized_pnl": 85.7,
           "first_entry_at": 1790656542
         },
         "99482648689191726280564212800369015248384764222227794003571882203866421918066": {
@@ -1939,9 +1939,9 @@
           "outcome": "Yes",
           "size": 923.54,
           "avg_price": 0.7541,
-          "current_price": 0.987,
-          "value_usd": 911.53,
-          "unrealized_pnl": 215.07,
+          "current_price": 0.988,
+          "value_usd": 912.46,
+          "unrealized_pnl": 216.0,
           "first_entry_at": 1789751089
         },
         "54873094270883439776877322951802597697575210965815273052647539990910026107795": {
@@ -2060,9 +2060,9 @@
           "outcome": "Yes",
           "size": 889.4605,
           "avg_price": 0.7604,
-          "current_price": 0.7315,
-          "value_usd": 650.64,
-          "unrealized_pnl": -25.76,
+          "current_price": 0.733,
+          "value_usd": 651.97,
+          "unrealized_pnl": -24.43,
           "first_entry_at": 1787540353
         },
         "68548583566016739338096013731462404558717046392793409574258932359859024005963": {
@@ -2093,9 +2093,9 @@
           "outcome": "Yes",
           "size": 650.8,
           "avg_price": 0.8072,
-          "current_price": 0.9625,
-          "value_usd": 626.39,
-          "unrealized_pnl": 101.05,
+          "current_price": 0.9615,
+          "value_usd": 625.74,
+          "unrealized_pnl": 100.4,
           "first_entry_at": 1789340089
         },
         "61011647044790357845890429867741559063793468543943078455464324333930636629819": {
@@ -2148,10 +2148,21 @@
           "outcome": "Yes",
           "size": 589.0,
           "avg_price": 0.8284,
-          "current_price": 0.9615,
-          "value_usd": 566.32,
-          "unrealized_pnl": 78.39,
+          "current_price": 0.961,
+          "value_usd": 566.03,
+          "unrealized_pnl": 78.1,
           "first_entry_at": 1785776604
+        },
+        "38171024903091354977195167437673496224420673639143973968032407064172828043588": {
+          "token_id": "38171024903091354977195167437673496224420673639143973968032407064172828043588",
+          "title": "Will Kamala Harris win the 2028 Democratic presidential nomination?",
+          "outcome": "Yes",
+          "size": 10788.9338,
+          "avg_price": 0.0623,
+          "current_price": 0.0515,
+          "value_usd": 555.63,
+          "unrealized_pnl": -116.99,
+          "first_entry_at": 1771015343
         },
         "110102705199530588976777616718115948005824665233400132417374621750887344831757": {
           "token_id": "110102705199530588976777616718115948005824665233400132417374621750887344831757",
@@ -2174,17 +2185,6 @@
           "value_usd": 546.51,
           "unrealized_pnl": 376.81,
           "first_entry_at": 1790102329
-        },
-        "38171024903091354977195167437673496224420673639143973968032407064172828043588": {
-          "token_id": "38171024903091354977195167437673496224420673639143973968032407064172828043588",
-          "title": "Will Kamala Harris win the 2028 Democratic presidential nomination?",
-          "outcome": "Yes",
-          "size": 10788.9338,
-          "avg_price": 0.0623,
-          "current_price": 0.0505,
-          "value_usd": 544.84,
-          "unrealized_pnl": -127.78,
-          "first_entry_at": 1771015343
         },
         "60481646602564966601461259391420144792804211840641781785098424870799925617619": {
           "token_id": "60481646602564966601461259391420144792804211840641781785098424870799925617619",
@@ -2214,9 +2214,9 @@
           "outcome": "No",
           "size": 550.44,
           "avg_price": 0.7913,
-          "current_price": 0.9545,
-          "value_usd": 525.39,
-          "unrealized_pnl": 89.83,
+          "current_price": 0.9555,
+          "value_usd": 525.95,
+          "unrealized_pnl": 90.38,
           "first_entry_at": 1790289644
         },
         "98023330367135269451866909161198169178030385257740387856159137036634561475909": {
@@ -2280,9 +2280,9 @@
           "outcome": "Yes",
           "size": 517.21,
           "avg_price": 0.821,
-          "current_price": 0.94,
-          "value_usd": 486.18,
-          "unrealized_pnl": 61.52,
+          "current_price": 0.9415,
+          "value_usd": 486.95,
+          "unrealized_pnl": 62.29,
           "first_entry_at": 1792613405
         },
         "101352346444332214782468497434958252920695095170479364446274757634561492067478": {
@@ -2351,6 +2351,17 @@
           "unrealized_pnl": 72.5,
           "first_entry_at": 1786905204
         },
+        "86289943987747159776825842265272854710936802623908746633461167878821927904902": {
+          "token_id": "86289943987747159776825842265272854710936802623908746633461167878821927904902",
+          "title": "Will Sam LaPorta have 424.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 489.99,
+          "avg_price": 0.8034,
+          "current_price": 0.91,
+          "value_usd": 445.89,
+          "unrealized_pnl": 52.2,
+          "first_entry_at": 1789331451
+        },
         "6910736566547042133554453555909446171900286773006374055475666122299881899745": {
           "token_id": "6910736566547042133554453555909446171900286773006374055475666122299881899745",
           "title": "Will Sam Darnold have 3,949.5+ passing yards in the 2026-27 NFL regular season?",
@@ -2372,17 +2383,6 @@
           "value_usd": 442.2,
           "unrealized_pnl": 5.1,
           "first_entry_at": 1790656478
-        },
-        "86289943987747159776825842265272854710936802623908746633461167878821927904902": {
-          "token_id": "86289943987747159776825842265272854710936802623908746633461167878821927904902",
-          "title": "Will Sam LaPorta have 424.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 489.99,
-          "avg_price": 0.8034,
-          "current_price": 0.9,
-          "value_usd": 440.99,
-          "unrealized_pnl": 47.3,
-          "first_entry_at": 1789331451
         },
         "110990921042495952965902976295020991792140911072775860039288489803505749086796": {
           "token_id": "110990921042495952965902976295020991792140911072775860039288489803505749086796",
@@ -2423,9 +2423,9 @@
           "outcome": "No",
           "size": 419.42,
           "avg_price": 0.8921,
-          "current_price": 0.968,
-          "value_usd": 406.0,
-          "unrealized_pnl": 31.79,
+          "current_price": 0.967,
+          "value_usd": 405.58,
+          "unrealized_pnl": 31.38,
           "first_entry_at": 1793568826
         },
         "60656779529061395144568299678783564859578483170019054386951073267792109461033": {
@@ -2516,6 +2516,17 @@
           "unrealized_pnl": 19.79,
           "first_entry_at": 1791744540
         },
+        "82699775691115447840140961218094068416573646728667064384876172987995936672615": {
+          "token_id": "82699775691115447840140961218094068416573646728667064384876172987995936672615",
+          "title": "Will Justin Jefferson have 4.5+ receiving touchdowns in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 392.56,
+          "avg_price": 0.813,
+          "current_price": 0.9305,
+          "value_usd": 365.28,
+          "unrealized_pnl": 46.1,
+          "first_entry_at": 1789336129
+        },
         "100574866148103421296585300391276948445676905867489031522207078902288161981680": {
           "token_id": "100574866148103421296585300391276948445676905867489031522207078902288161981680",
           "title": "Will Jason Robertson record 80+ points in the 2026-27 regular season?",
@@ -2526,17 +2537,6 @@
           "value_usd": 362.1,
           "unrealized_pnl": 0.0,
           "first_entry_at": 1790656046
-        },
-        "82699775691115447840140961218094068416573646728667064384876172987995936672615": {
-          "token_id": "82699775691115447840140961218094068416573646728667064384876172987995936672615",
-          "title": "Will Justin Jefferson have 4.5+ receiving touchdowns in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 392.56,
-          "avg_price": 0.813,
-          "current_price": 0.919,
-          "value_usd": 360.76,
-          "unrealized_pnl": 41.59,
-          "first_entry_at": 1789336129
         },
         "67942197676900913733363598284073780387699664504405719615208568612469151462433": {
           "token_id": "67942197676900913733363598284073780387699664504405719615208568612469151462433",
@@ -2555,9 +2555,9 @@
           "outcome": "No",
           "size": 362.43,
           "avg_price": 0.9183,
-          "current_price": 0.9665,
-          "value_usd": 350.29,
-          "unrealized_pnl": 17.44,
+          "current_price": 0.9675,
+          "value_usd": 350.65,
+          "unrealized_pnl": 17.8,
           "first_entry_at": 1789247368
         },
         "46783629705291485911485121419859653213834558974145171524300162926098164799884": {
@@ -2610,9 +2610,9 @@
           "outcome": "No",
           "size": 346.92,
           "avg_price": 0.9321,
-          "current_price": 0.9705,
-          "value_usd": 336.69,
-          "unrealized_pnl": 13.29,
+          "current_price": 0.971,
+          "value_usd": 336.86,
+          "unrealized_pnl": 13.47,
           "first_entry_at": 1790102356
         },
         "17320592898526544822044833295401400755961194348705170492538425349376048824877": {
@@ -2621,9 +2621,9 @@
           "outcome": "Yes",
           "size": 393.04,
           "avg_price": 0.75,
-          "current_price": 0.855,
-          "value_usd": 336.05,
-          "unrealized_pnl": 41.27,
+          "current_price": 0.85,
+          "value_usd": 334.08,
+          "unrealized_pnl": 39.3,
           "first_entry_at": 1793756038
         },
         "50939042031703572926092235111313230683665789550415175292444654887849326071200": {
@@ -2879,17 +2879,6 @@
           "unrealized_pnl": 31.27,
           "first_entry_at": 1793147072
         },
-        "28843951938589837803432572045886658081906183171172495252365871846159438316279": {
-          "token_id": "28843951938589837803432572045886658081906183171172495252365871846159438316279",
-          "title": "Will Christian Watson have 599.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 259.58,
-          "avg_price": 0.8699,
-          "current_price": 0.967,
-          "value_usd": 251.01,
-          "unrealized_pnl": 25.18,
-          "first_entry_at": 1789336581
-        },
         "56809364142589872590440369455414933200083753596770062508643834415097777045657": {
           "token_id": "56809364142589872590440369455414933200083753596770062508643834415097777045657",
           "title": "Will Rashid Shaheed have 299.5+ receiving yards in the 2026-27 NFL regular season?",
@@ -2918,9 +2907,9 @@
           "outcome": "No",
           "size": 258.02,
           "avg_price": 0.7958,
-          "current_price": 0.971,
-          "value_usd": 250.54,
-          "unrealized_pnl": 45.2,
+          "current_price": 0.9715,
+          "value_usd": 250.67,
+          "unrealized_pnl": 45.33,
           "first_entry_at": 1790036656
         },
         "95887285923321594738792474032345425509048144350378808714513926736815035963957": {
@@ -2933,6 +2922,17 @@
           "value_usd": 249.91,
           "unrealized_pnl": -132.96,
           "first_entry_at": 1790887326
+        },
+        "28843951938589837803432572045886658081906183171172495252365871846159438316279": {
+          "token_id": "28843951938589837803432572045886658081906183171172495252365871846159438316279",
+          "title": "Will Christian Watson have 599.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 259.58,
+          "avg_price": 0.8699,
+          "current_price": 0.9615,
+          "value_usd": 249.59,
+          "unrealized_pnl": 23.75,
+          "first_entry_at": 1789336581
         },
         "646395467148429043600854670800571932637513740702033660134973467543975452861": {
           "token_id": "646395467148429043600854670800571932637513740702033660134973467543975452861",
@@ -2951,9 +2951,9 @@
           "outcome": "Yes",
           "size": 254.9,
           "avg_price": 0.7936,
-          "current_price": 0.976,
-          "value_usd": 248.78,
-          "unrealized_pnl": 46.48,
+          "current_price": 0.974,
+          "value_usd": 248.27,
+          "unrealized_pnl": 45.97,
           "first_entry_at": 1787063494
         },
         "26316063837777803162165505777608153097737178856995923139684586214777502385423": {
@@ -3050,9 +3050,9 @@
           "outcome": "No",
           "size": 219.53,
           "avg_price": 0.4607,
-          "current_price": 0.9725,
-          "value_usd": 213.49,
-          "unrealized_pnl": 112.34,
+          "current_price": 0.972,
+          "value_usd": 213.38,
+          "unrealized_pnl": 112.23,
           "first_entry_at": 1790102323
         },
         "49301246036431308125479137663725932480470929666488370576499231168759191863723": {
@@ -3193,9 +3193,9 @@
           "outcome": "No",
           "size": 192.28,
           "avg_price": 0.8125,
-          "current_price": 0.955,
-          "value_usd": 183.63,
-          "unrealized_pnl": 27.38,
+          "current_price": 0.9555,
+          "value_usd": 183.72,
+          "unrealized_pnl": 27.48,
           "first_entry_at": 1790542752
         },
         "32674176331557678648567137099134215683619793514205907135490242810834220525512": {
@@ -3242,17 +3242,6 @@
           "unrealized_pnl": 5.05,
           "first_entry_at": 1790477855
         },
-        "60059142579299389688399953870441006660328601934270283072841401215862816861385": {
-          "token_id": "60059142579299389688399953870441006660328601934270283072841401215862816861385",
-          "title": "Will Calvin Ridley have 224.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 241.8,
-          "avg_price": 0.8218,
-          "current_price": 0.744,
-          "value_usd": 179.9,
-          "unrealized_pnl": -18.82,
-          "first_entry_at": 1787062888
-        },
         "64989905439732259516751726455948705212937849423127877130077428799406875256504": {
           "token_id": "64989905439732259516751726455948705212937849423127877130077428799406875256504",
           "title": "Will Sam Darnold have 4,199.5+ passing yards in the 2026-27 NFL regular season?",
@@ -3297,6 +3286,17 @@
           "unrealized_pnl": -73.32,
           "first_entry_at": 1791518434
         },
+        "60059142579299389688399953870441006660328601934270283072841401215862816861385": {
+          "token_id": "60059142579299389688399953870441006660328601934270283072841401215862816861385",
+          "title": "Will Calvin Ridley have 224.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 241.8,
+          "avg_price": 0.8218,
+          "current_price": 0.7325,
+          "value_usd": 177.12,
+          "unrealized_pnl": -21.6,
+          "first_entry_at": 1787062888
+        },
         "92211626067762872979689028168994559869168850986517941798899698030776987639455": {
           "token_id": "92211626067762872979689028168994559869168850986517941798899698030776987639455",
           "title": "Will KC Concepcion have 1,024.5+ receiving yards in the 2026-27 NFL regular season?",
@@ -3336,9 +3336,9 @@
           "outcome": "Yes",
           "size": 200.24,
           "avg_price": 0.6849,
-          "current_price": 0.8555,
-          "value_usd": 171.31,
-          "unrealized_pnl": 34.15,
+          "current_price": 0.8565,
+          "value_usd": 171.51,
+          "unrealized_pnl": 34.35,
           "first_entry_at": 1789337874
         },
         "70663352401606372246362604193214664065595751757222752105245221905399175050480": {
@@ -3391,9 +3391,9 @@
           "outcome": "No",
           "size": 178.72,
           "avg_price": 0.9134,
-          "current_price": 0.92,
-          "value_usd": 164.42,
-          "unrealized_pnl": 1.17,
+          "current_price": 0.9195,
+          "value_usd": 164.33,
+          "unrealized_pnl": 1.08,
           "first_entry_at": 1790454260
         },
         "35534305700450825444858885470660615277866019779333939896361902656286643575829": {
@@ -3446,9 +3446,9 @@
           "outcome": "No",
           "size": 201.78,
           "avg_price": 0.8408,
-          "current_price": 0.7635,
-          "value_usd": 154.06,
-          "unrealized_pnl": -15.6,
+          "current_price": 0.763,
+          "value_usd": 153.96,
+          "unrealized_pnl": -15.7,
           "first_entry_at": 1793501724
         },
         "74347223216860712312233049603557491866586362552346047170906157427988625147649": {
@@ -3512,9 +3512,9 @@
           "outcome": "Yes",
           "size": 171.0,
           "avg_price": 0.8263,
-          "current_price": 0.8615,
-          "value_usd": 147.32,
-          "unrealized_pnl": 6.01,
+          "current_price": 0.8715,
+          "value_usd": 149.03,
+          "unrealized_pnl": 7.72,
           "first_entry_at": 1787064184
         },
         "97993757428721168876162536259647791825542475393548941281931756861065770791561": {
@@ -3528,6 +3528,28 @@
           "unrealized_pnl": 5.12,
           "first_entry_at": 1790102370
         },
+        "5457367740724420239325732988710710397487374503051198980543962142622882904021": {
+          "token_id": "5457367740724420239325732988710710397487374503051198980543962142622882904021",
+          "title": "Will DK Metcalf have 1.5+ receiving touchdowns in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 195.1,
+          "avg_price": 0.7799,
+          "current_price": 0.743,
+          "value_usd": 144.96,
+          "unrealized_pnl": -7.22,
+          "first_entry_at": 1787066280
+        },
+        "86523991696304316073891016319029046783168251719644227716248452205362877020752": {
+          "token_id": "86523991696304316073891016319029046783168251719644227716248452205362877020752",
+          "title": "Will Parker Washington have 549.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 222.21,
+          "avg_price": 0.8193,
+          "current_price": 0.652,
+          "value_usd": 144.88,
+          "unrealized_pnl": -37.2,
+          "first_entry_at": 1787063500
+        },
         "108217178403325482981901050388309533367616504296704858719436360568929052274641": {
           "token_id": "108217178403325482981901050388309533367616504296704858719436360568929052274641",
           "title": "Will Jameson Williams have 499.5+ receiving yards in the 2026-27 NFL regular season?",
@@ -3539,26 +3561,15 @@
           "unrealized_pnl": -5.72,
           "first_entry_at": 1787064292
         },
-        "5457367740724420239325732988710710397487374503051198980543962142622882904021": {
-          "token_id": "5457367740724420239325732988710710397487374503051198980543962142622882904021",
-          "title": "Will DK Metcalf have 1.5+ receiving touchdowns in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 195.1,
-          "avg_price": 0.7799,
-          "current_price": 0.7425,
-          "value_usd": 144.86,
-          "unrealized_pnl": -7.32,
-          "first_entry_at": 1787066280
-        },
         "12609364962524141135709649122005207404506775603218530848152613957182498889928": {
           "token_id": "12609364962524141135709649122005207404506775603218530848152613957182498889928",
           "title": "Will Omar Cooper Jr. have 99.5+ receiving yards in the 2026-27 NFL regular season?",
           "outcome": "Yes",
           "size": 161.0,
           "avg_price": 0.9496,
-          "current_price": 0.8995,
-          "value_usd": 144.82,
-          "unrealized_pnl": -8.08,
+          "current_price": 0.899,
+          "value_usd": 144.74,
+          "unrealized_pnl": -8.16,
           "first_entry_at": 1789834635
         },
         "63792279857699756809040017799294529960012412852114392541264119904275404584329": {
@@ -3571,17 +3582,6 @@
           "value_usd": 143.91,
           "unrealized_pnl": 9.05,
           "first_entry_at": 1787064049
-        },
-        "86523991696304316073891016319029046783168251719644227716248452205362877020752": {
-          "token_id": "86523991696304316073891016319029046783168251719644227716248452205362877020752",
-          "title": "Will Parker Washington have 549.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 222.21,
-          "avg_price": 0.8193,
-          "current_price": 0.646,
-          "value_usd": 143.55,
-          "unrealized_pnl": -38.53,
-          "first_entry_at": 1787063500
         },
         "104044423014685999013376800768995404675050453660903755449520936501772084134278": {
           "token_id": "104044423014685999013376800768995404675050453660903755449520936501772084134278",
@@ -3611,9 +3611,9 @@
           "outcome": "No",
           "size": 165.47,
           "avg_price": 0.6518,
-          "current_price": 0.8525,
-          "value_usd": 141.06,
-          "unrealized_pnl": 33.2,
+          "current_price": 0.854,
+          "value_usd": 141.31,
+          "unrealized_pnl": 33.45,
           "first_entry_at": 1790102386
         },
         "77001639760095266374534198365421436593389036687975321536722226607654949914567": {
@@ -3622,9 +3622,9 @@
           "outcome": "Yes",
           "size": 144.96,
           "avg_price": 0.7962,
-          "current_price": 0.9715,
-          "value_usd": 140.83,
-          "unrealized_pnl": 25.41,
+          "current_price": 0.9705,
+          "value_usd": 140.68,
+          "unrealized_pnl": 25.26,
           "first_entry_at": 1793772322
         },
         "25890879576961503725782400624946910935648623213251657467806443011987401240543": {
@@ -3638,17 +3638,6 @@
           "unrealized_pnl": -72.0,
           "first_entry_at": 1789246509
         },
-        "2165299125474110106087588601390180562744952096133741431077599435455975620588": {
-          "token_id": "2165299125474110106087588601390180562744952096133741431077599435455975620588",
-          "title": "Will KC Concepcion have 224.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 280.02,
-          "avg_price": 0.8436,
-          "current_price": 0.4985,
-          "value_usd": 139.59,
-          "unrealized_pnl": -96.66,
-          "first_entry_at": 1787064279
-        },
         "91641609975611648787795447240626352260342636820366680158824212487384294827267": {
           "token_id": "91641609975611648787795447240626352260342636820366680158824212487384294827267",
           "title": "Will Caleb Williams have 27.5+ passing touchdowns in the 2026-27 NFL regular season?",
@@ -3659,6 +3648,17 @@
           "value_usd": 139.5,
           "unrealized_pnl": 7.4,
           "first_entry_at": 1789932800
+        },
+        "2165299125474110106087588601390180562744952096133741431077599435455975620588": {
+          "token_id": "2165299125474110106087588601390180562744952096133741431077599435455975620588",
+          "title": "Will KC Concepcion have 224.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 280.02,
+          "avg_price": 0.8436,
+          "current_price": 0.4975,
+          "value_usd": 139.31,
+          "unrealized_pnl": -96.94,
+          "first_entry_at": 1787064279
         },
         "106464589845250400124249015666766731317110899241411841699938652823328750757436": {
           "token_id": "106464589845250400124249015666766731317110899241411841699938652823328750757436",
@@ -3715,17 +3715,6 @@
           "unrealized_pnl": -1.85,
           "first_entry_at": 1793557132
         },
-        "56197091104305200346933886942759977982080525369922925808647573351429946499204": {
-          "token_id": "56197091104305200346933886942759977982080525369922925808647573351429946499204",
-          "title": "Will A.J. Brown have 1,124.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "No",
-          "size": 252.13,
-          "avg_price": 0.8284,
-          "current_price": 0.5305,
-          "value_usd": 133.75,
-          "unrealized_pnl": -75.12,
-          "first_entry_at": 1789082454
-        },
         "78499051753835538602594528757840341158561188375642344575994669979342369428910": {
           "token_id": "78499051753835538602594528757840341158561188375642344575994669979342369428910",
           "title": "Will the Baltimore Ravens have more than 12.5 wins during the 2026 NFL season?",
@@ -3781,6 +3770,17 @@
           "unrealized_pnl": 1.56,
           "first_entry_at": 1793648598
         },
+        "56197091104305200346933886942759977982080525369922925808647573351429946499204": {
+          "token_id": "56197091104305200346933886942759977982080525369922925808647573351429946499204",
+          "title": "Will A.J. Brown have 1,124.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "No",
+          "size": 252.13,
+          "avg_price": 0.8284,
+          "current_price": 0.498,
+          "value_usd": 125.56,
+          "unrealized_pnl": -83.31,
+          "first_entry_at": 1789082454
+        },
         "49562076897417655628474068343613268950447552794627551679567455813139629499098": {
           "token_id": "49562076897417655628474068343613268950447552794627551679567455813139629499098",
           "title": "Will Jack Eichel record 80+ points in the 2026-27 regular season?",
@@ -3792,6 +3792,17 @@
           "unrealized_pnl": 10.4,
           "first_entry_at": 1790656053
         },
+        "17264319761398310825616824745704814736813143302778740488149301851385335717040": {
+          "token_id": "17264319761398310825616824745704814736813143302778740488149301851385335717040",
+          "title": "Will Carnell Tate have 574.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 136.46,
+          "avg_price": 0.7047,
+          "current_price": 0.9,
+          "value_usd": 122.81,
+          "unrealized_pnl": 26.64,
+          "first_entry_at": 1790537666
+        },
         "75012164839474501830174536892899439897034675625404960971388326526300605189991": {
           "token_id": "75012164839474501830174536892899439897034675625404960971388326526300605189991",
           "title": "Will CeeDee Lamb have 799.5+ receiving yards in the 2026-27 NFL regular season?",
@@ -3802,17 +3813,6 @@
           "value_usd": 122.17,
           "unrealized_pnl": 27.68,
           "first_entry_at": 1787062977
-        },
-        "17264319761398310825616824745704814736813143302778740488149301851385335717040": {
-          "token_id": "17264319761398310825616824745704814736813143302778740488149301851385335717040",
-          "title": "Will Carnell Tate have 574.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 136.46,
-          "avg_price": 0.7047,
-          "current_price": 0.895,
-          "value_usd": 122.13,
-          "unrealized_pnl": 25.96,
-          "first_entry_at": 1790537666
         },
         "62469805757969537736168797441097980191913896393615807369697344982226707597592": {
           "token_id": "62469805757969537736168797441097980191913896393615807369697344982226707597592",
@@ -3908,9 +3908,9 @@
           "outcome": "Yes",
           "size": 115.47,
           "avg_price": 0.9027,
-          "current_price": 0.9725,
-          "value_usd": 112.29,
-          "unrealized_pnl": 8.05,
+          "current_price": 0.9715,
+          "value_usd": 112.18,
+          "unrealized_pnl": 7.94,
           "first_entry_at": 1789337362
         },
         "9035907931700021953781733329251327521516638101774992903780790026083445937897": {
@@ -4018,9 +4018,9 @@
           "outcome": "No",
           "size": 110.0,
           "avg_price": 0.919,
-          "current_price": 0.902,
-          "value_usd": 99.22,
-          "unrealized_pnl": -1.88,
+          "current_price": 0.9025,
+          "value_usd": 99.28,
+          "unrealized_pnl": -1.82,
           "first_entry_at": 1792457498
         },
         "42500748942050048006853956973829295399751578818993865265843655953670427039527": {
@@ -4381,9 +4381,9 @@
           "outcome": "Yes",
           "size": 156.1,
           "avg_price": 0.7093,
-          "current_price": 0.47,
-          "value_usd": 73.37,
-          "unrealized_pnl": -37.36,
+          "current_price": 0.46,
+          "value_usd": 71.81,
+          "unrealized_pnl": -38.92,
           "first_entry_at": 1787064612
         },
         "5671805224542879768640213616363713192167288550060997720346676888399226595368": {
@@ -4557,9 +4557,9 @@
           "outcome": "Yes",
           "size": 122.94,
           "avg_price": 0.2101,
-          "current_price": 0.51,
-          "value_usd": 62.7,
-          "unrealized_pnl": 36.87,
+          "current_price": 0.509,
+          "value_usd": 62.58,
+          "unrealized_pnl": 36.75,
           "first_entry_at": 1792805240
         },
         "109020114285374948529127788362047673186871192617295704844322440630868167652764": {
@@ -4612,9 +4612,9 @@
           "outcome": "No",
           "size": 65.0,
           "avg_price": 0.9092,
-          "current_price": 0.9425,
-          "value_usd": 61.26,
-          "unrealized_pnl": 2.16,
+          "current_price": 0.944,
+          "value_usd": 61.36,
+          "unrealized_pnl": 2.26,
           "first_entry_at": 1791674367
         },
         "73656571746685407825809879494370384160074618392212407044672405139522666507541": {
@@ -4667,9 +4667,9 @@
           "outcome": "Yes",
           "size": 61.0,
           "avg_price": 0.9196,
-          "current_price": 0.954,
-          "value_usd": 58.19,
-          "unrealized_pnl": 2.09,
+          "current_price": 0.9545,
+          "value_usd": 58.22,
+          "unrealized_pnl": 2.12,
           "first_entry_at": 1791747244
         },
         "57288726298530221297307418915810897025949412326373616293204035452680648570404": {
@@ -4700,9 +4700,9 @@
           "outcome": "Yes",
           "size": 60.0,
           "avg_price": 0.6933,
-          "current_price": 0.946,
-          "value_usd": 56.76,
-          "unrealized_pnl": 15.16,
+          "current_price": 0.947,
+          "value_usd": 56.82,
+          "unrealized_pnl": 15.22,
           "first_entry_at": 1790904602
         },
         "111320157873088546995467642474620962390325610955207732105595549290917146618426": {
@@ -4744,9 +4744,9 @@
           "outcome": "No",
           "size": 79.0,
           "avg_price": 0.8969,
-          "current_price": 0.665,
-          "value_usd": 52.53,
-          "unrealized_pnl": -18.33,
+          "current_price": 0.669,
+          "value_usd": 52.85,
+          "unrealized_pnl": -18.01,
           "first_entry_at": 1791600248
         },
         "3856610692072491586879046497598349714069388501356984726957942236610267482953": {
@@ -4755,9 +4755,9 @@
           "outcome": "Yes",
           "size": 100.0,
           "avg_price": 0.87,
-          "current_price": 0.5015,
-          "value_usd": 50.15,
-          "unrealized_pnl": -36.85,
+          "current_price": 0.502,
+          "value_usd": 50.2,
+          "unrealized_pnl": -36.8,
           "first_entry_at": 1787064981
         },
         "102306036555411698701328613608271953204440232800245047712598513853982190899286": {
@@ -4865,9 +4865,9 @@
           "outcome": "No",
           "size": 46.89,
           "avg_price": 0.9531,
-          "current_price": 0.989,
-          "value_usd": 46.37,
-          "unrealized_pnl": 1.68,
+          "current_price": 0.9895,
+          "value_usd": 46.4,
+          "unrealized_pnl": 1.7,
           "first_entry_at": 1789876728
         },
         "70403140242643899768190062345985278669228168668777052166514328307773753242698": {
@@ -4881,17 +4881,6 @@
           "unrealized_pnl": -1.22,
           "first_entry_at": 1793648649
         },
-        "44827488564707201546053261278041670350652944995783022520396372118599810336393": {
-          "token_id": "44827488564707201546053261278041670350652944995783022520396372118599810336393",
-          "title": "Will Garrett Wilson have 599.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 50.0,
-          "avg_price": 0.85,
-          "current_price": 0.899,
-          "value_usd": 44.95,
-          "unrealized_pnl": 2.45,
-          "first_entry_at": 1787066337
-        },
         "19908225036613379062664854556994904259696117312865617710185334496458780956107": {
           "token_id": "19908225036613379062664854556994904259696117312865617710185334496458780956107",
           "title": "Will Cameron Skattebo have 4.5+ rushing touchdowns in the 2026-27 NFL regular season?",
@@ -4902,6 +4891,17 @@
           "value_usd": 44.9,
           "unrealized_pnl": -15.0,
           "first_entry_at": 1789346583
+        },
+        "44827488564707201546053261278041670350652944995783022520396372118599810336393": {
+          "token_id": "44827488564707201546053261278041670350652944995783022520396372118599810336393",
+          "title": "Will Garrett Wilson have 599.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 50.0,
+          "avg_price": 0.85,
+          "current_price": 0.8975,
+          "value_usd": 44.88,
+          "unrealized_pnl": 2.38,
+          "first_entry_at": 1787066337
         },
         "106715196892050353852000822125578653307218726424826431508661756925590122775273": {
           "token_id": "106715196892050353852000822125578653307218726424826431508661756925590122775273",
@@ -4931,9 +4931,9 @@
           "outcome": "No",
           "size": 45.12,
           "avg_price": 0.7188,
-          "current_price": 0.966,
-          "value_usd": 43.59,
-          "unrealized_pnl": 11.15,
+          "current_price": 0.9655,
+          "value_usd": 43.56,
+          "unrealized_pnl": 11.13,
           "first_entry_at": 1790657774
         },
         "94934357947658428057092294091373989675422385315630920448032060977846997100140": {
@@ -5002,6 +5002,17 @@
           "unrealized_pnl": 3.55,
           "first_entry_at": 1792457525
         },
+        "85807889762620677425886743746172387015874676980032337139410472321168818002895": {
+          "token_id": "85807889762620677425886743746172387015874676980032337139410472321168818002895",
+          "title": "Will Justin Jefferson have 949.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 76.0,
+          "avg_price": 0.8921,
+          "current_price": 0.545,
+          "value_usd": 41.42,
+          "unrealized_pnl": -26.38,
+          "first_entry_at": 1789336156
+        },
         "30227566937923565146601147914399084763919880019064348611241880999930395539402": {
           "token_id": "30227566937923565146601147914399084763919880019064348611241880999930395539402",
           "title": "Will Terry McLaurin have 1,149.5+ receiving yards in the 2026-27 NFL regular season?",
@@ -5063,21 +5074,10 @@
           "outcome": "No",
           "size": 42.0,
           "avg_price": 0.93,
-          "current_price": 0.9605,
-          "value_usd": 40.34,
-          "unrealized_pnl": 1.28,
+          "current_price": 0.9585,
+          "value_usd": 40.26,
+          "unrealized_pnl": 1.2,
           "first_entry_at": 1789082443
-        },
-        "85807889762620677425886743746172387015874676980032337139410472321168818002895": {
-          "token_id": "85807889762620677425886743746172387015874676980032337139410472321168818002895",
-          "title": "Will Justin Jefferson have 949.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 76.0,
-          "avg_price": 0.8921,
-          "current_price": 0.53,
-          "value_usd": 40.28,
-          "unrealized_pnl": -27.52,
-          "first_entry_at": 1789336156
         },
         "30621173305387099914286157461055123502958800530800075763041227812902439255509": {
           "token_id": "30621173305387099914286157461055123502958800530800075763041227812902439255509",
@@ -5123,17 +5123,6 @@
           "unrealized_pnl": -25.41,
           "first_entry_at": 1789247046
         },
-        "32760893799000992968294189727426688606340208111803319966335855488712302355212": {
-          "token_id": "32760893799000992968294189727426688606340208111803319966335855488712302355212",
-          "title": "Will Jayden Daniels have 749.5+ rushing yards in the 2026-27 NFL regular season?",
-          "outcome": "No",
-          "size": 61.14,
-          "avg_price": 0.6726,
-          "current_price": 0.62,
-          "value_usd": 37.91,
-          "unrealized_pnl": -3.22,
-          "first_entry_at": 1789941334
-        },
         "57625981921470100838225199336511192452312068694609504475615896579566939162113": {
           "token_id": "57625981921470100838225199336511192452312068694609504475615896579566939162113",
           "title": "Will Sam LaPorta have 4.5+ receiving touchdowns in the 2026-27 NFL regular season?",
@@ -5145,16 +5134,16 @@
           "unrealized_pnl": -3.02,
           "first_entry_at": 1791754156
         },
-        "21261983953803283815256780386216572100121752610106012534604951515343348188186": {
-          "token_id": "21261983953803283815256780386216572100121752610106012534604951515343348188186",
-          "title": "Will Mike Evans have 424.5+ receiving yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 62.0,
-          "avg_price": 0.9267,
-          "current_price": 0.603,
-          "value_usd": 37.39,
-          "unrealized_pnl": -20.07,
-          "first_entry_at": 1792456473
+        "32760893799000992968294189727426688606340208111803319966335855488712302355212": {
+          "token_id": "32760893799000992968294189727426688606340208111803319966335855488712302355212",
+          "title": "Will Jayden Daniels have 749.5+ rushing yards in the 2026-27 NFL regular season?",
+          "outcome": "No",
+          "size": 61.14,
+          "avg_price": 0.6726,
+          "current_price": 0.61,
+          "value_usd": 37.3,
+          "unrealized_pnl": -3.83,
+          "first_entry_at": 1789941334
         },
         "80899266770504529018290042154030138253177310292049634059809645316584874399760": {
           "token_id": "80899266770504529018290042154030138253177310292049634059809645316584874399760",
@@ -5177,6 +5166,17 @@
           "value_usd": 36.92,
           "unrealized_pnl": 0.78,
           "first_entry_at": 1770686661
+        },
+        "21261983953803283815256780386216572100121752610106012534604951515343348188186": {
+          "token_id": "21261983953803283815256780386216572100121752610106012534604951515343348188186",
+          "title": "Will Mike Evans have 424.5+ receiving yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 62.0,
+          "avg_price": 0.9267,
+          "current_price": 0.594,
+          "value_usd": 36.83,
+          "unrealized_pnl": -20.63,
+          "first_entry_at": 1792456473
         },
         "27787997098794978254996657233194370003230783285160528896619757138564449288290": {
           "token_id": "27787997098794978254996657233194370003230783285160528896619757138564449288290",
@@ -5211,17 +5211,6 @@
           "unrealized_pnl": -19.83,
           "first_entry_at": 1792968842
         },
-        "48566046548914168443252668519852295704538578584318207505303160546351275413281": {
-          "token_id": "48566046548914168443252668519852295704538578584318207505303160546351275413281",
-          "title": "Will Anthropic IPO by December 31, 2026?",
-          "outcome": "Yes",
-          "size": 38.95,
-          "avg_price": 0.8599,
-          "current_price": 0.91,
-          "value_usd": 35.44,
-          "unrealized_pnl": 1.95,
-          "first_entry_at": 1790875692
-        },
         "103048410974705930783110368899150618200958807535586688431946810594291488485132": {
           "token_id": "103048410974705930783110368899150618200958807535586688431946810594291488485132",
           "title": "Will Sergey Brin be 2nd richest person on December 31?",
@@ -5232,6 +5221,17 @@
           "value_usd": 35.43,
           "unrealized_pnl": 3.0,
           "first_entry_at": 1790915946
+        },
+        "48566046548914168443252668519852295704538578584318207505303160546351275413281": {
+          "token_id": "48566046548914168443252668519852295704538578584318207505303160546351275413281",
+          "title": "Will Anthropic IPO by December 31, 2026?",
+          "outcome": "Yes",
+          "size": 38.95,
+          "avg_price": 0.8599,
+          "current_price": 0.909,
+          "value_usd": 35.41,
+          "unrealized_pnl": 1.91,
+          "first_entry_at": 1790875692
         },
         "30525781073788519128338027032585685903516007603998256146683491031832942565955": {
           "token_id": "30525781073788519128338027032585685903516007603998256146683491031832942565955",
@@ -5266,17 +5266,6 @@
           "unrealized_pnl": -4.7,
           "first_entry_at": 1777494638
         },
-        "76687910866127963580133423944873937636329872018607507301860162970013346634222": {
-          "token_id": "76687910866127963580133423944873937636329872018607507301860162970013346634222",
-          "title": "Will Tennessee have more than 9.5 wins during the 2026 CFB season?",
-          "outcome": "No",
-          "size": 40.0,
-          "avg_price": 0.78,
-          "current_price": 0.83,
-          "value_usd": 33.2,
-          "unrealized_pnl": 2.0,
-          "first_entry_at": 1792883660
-        },
         "107729402733481801715276727183402507127741210361101226673865413196241742960596": {
           "token_id": "107729402733481801715276727183402507127741210361101226673865413196241742960596",
           "title": " Iran agrees to end enrichment of uranium by December 31?",
@@ -5287,6 +5276,17 @@
           "value_usd": 32.73,
           "unrealized_pnl": -182.02,
           "first_entry_at": 1778138101
+        },
+        "76687910866127963580133423944873937636329872018607507301860162970013346634222": {
+          "token_id": "76687910866127963580133423944873937636329872018607507301860162970013346634222",
+          "title": "Will Tennessee have more than 9.5 wins during the 2026 CFB season?",
+          "outcome": "No",
+          "size": 40.0,
+          "avg_price": 0.78,
+          "current_price": 0.81,
+          "value_usd": 32.4,
+          "unrealized_pnl": 1.2,
+          "first_entry_at": 1792883660
         },
         "40108872728800229702197542675918639567602289184616581624453076198355786338908": {
           "token_id": "40108872728800229702197542675918639567602289184616581624453076198355786338908",
@@ -5309,17 +5309,6 @@
           "value_usd": 31.92,
           "unrealized_pnl": -16.18,
           "first_entry_at": 1790195255
-        },
-        "57459459588879709963273319381990007828380061496082234866420014454347747306788": {
-          "token_id": "57459459588879709963273319381990007828380061496082234866420014454347747306788",
-          "title": "Will the Chicago Bears leave Illinois by Dec. 31?",
-          "outcome": "Yes",
-          "size": 253.16,
-          "avg_price": 0.5063,
-          "current_price": 0.125,
-          "value_usd": 31.64,
-          "unrealized_pnl": -96.55,
-          "first_entry_at": 1780676247
         },
         "64039581439321417564929833252973624789319290809867147828847308364677594639636": {
           "token_id": "64039581439321417564929833252973624789319290809867147828847308364677594639636",
@@ -5375,6 +5364,17 @@
           "value_usd": 30.89,
           "unrealized_pnl": -5.86,
           "first_entry_at": 1791744832
+        },
+        "57459459588879709963273319381990007828380061496082234866420014454347747306788": {
+          "token_id": "57459459588879709963273319381990007828380061496082234866420014454347747306788",
+          "title": "Will the Chicago Bears leave Illinois by Dec. 31?",
+          "outcome": "Yes",
+          "size": 253.16,
+          "avg_price": 0.5063,
+          "current_price": 0.12,
+          "value_usd": 30.38,
+          "unrealized_pnl": -97.82,
+          "first_entry_at": 1780676247
         },
         "39869583606487095184448764510176835186374053682252446299678121424563500313889": {
           "token_id": "39869583606487095184448764510176835186374053682252446299678121424563500313889",
@@ -5459,9 +5459,9 @@
           "outcome": "No",
           "size": 32.25,
           "avg_price": 0.9699,
-          "current_price": 0.9105,
-          "value_usd": 29.36,
-          "unrealized_pnl": -1.92,
+          "current_price": 0.9115,
+          "value_usd": 29.4,
+          "unrealized_pnl": -1.89,
           "first_entry_at": 1793648619
         },
         "115308025553175733354063599453754197414448781983500260854106288661874905911930": {
@@ -5470,9 +5470,9 @@
           "outcome": "Yes",
           "size": 61.0,
           "avg_price": 0.9365,
-          "current_price": 0.474,
-          "value_usd": 28.91,
-          "unrealized_pnl": -28.22,
+          "current_price": 0.473,
+          "value_usd": 28.85,
+          "unrealized_pnl": -28.28,
           "first_entry_at": 1789331718
         },
         "89225683436798726788024882776723238332306786791953725644544655593601031230620": {
@@ -5569,9 +5569,9 @@
           "outcome": "No",
           "size": 26.16,
           "avg_price": 0.948,
-          "current_price": 0.973,
-          "value_usd": 25.45,
-          "unrealized_pnl": 0.65,
+          "current_price": 0.972,
+          "value_usd": 25.43,
+          "unrealized_pnl": 0.63,
           "first_entry_at": 1790612499
         },
         "91013848322550048814071971304083576506950786739841547937467316113876264462094": {
@@ -5580,9 +5580,9 @@
           "outcome": "Yes",
           "size": 50.0,
           "avg_price": 0.86,
-          "current_price": 0.485,
-          "value_usd": 24.25,
-          "unrealized_pnl": -18.75,
+          "current_price": 0.495,
+          "value_usd": 24.75,
+          "unrealized_pnl": -18.25,
           "first_entry_at": 1789322361
         },
         "19765552989313875585857188552293576277970792064964017778081347797769252697571": {
@@ -5591,9 +5591,9 @@
           "outcome": "No",
           "size": 23.99,
           "avg_price": 0.9746,
-          "current_price": 0.9865,
-          "value_usd": 23.67,
-          "unrealized_pnl": 0.29,
+          "current_price": 0.987,
+          "value_usd": 23.68,
+          "unrealized_pnl": 0.3,
           "first_entry_at": 1791679750
         },
         "81656910830867037729539840657334790630944960988349858019434432692091211616404": {
@@ -5624,9 +5624,9 @@
           "outcome": "Yes",
           "size": 25.0,
           "avg_price": 0.8719,
-          "current_price": 0.865,
-          "value_usd": 21.62,
-          "unrealized_pnl": -0.17,
+          "current_price": 0.855,
+          "value_usd": 21.38,
+          "unrealized_pnl": -0.42,
           "first_entry_at": 1792456479
         },
         "960918973082407903493565657355595499908357981692173236732037774417873560206": {
@@ -5860,17 +5860,6 @@
           "unrealized_pnl": 7.4,
           "first_entry_at": 1790550992
         },
-        "17119154060762939837303153532154744480893515299339917817378655626147529788480": {
-          "token_id": "17119154060762939837303153532154744480893515299339917817378655626147529788480",
-          "title": "Will a new country join the Abraham Accords before 2027?",
-          "outcome": "Yes",
-          "size": 133.49,
-          "avg_price": 0.6429,
-          "current_price": 0.127,
-          "value_usd": 16.95,
-          "unrealized_pnl": -68.88,
-          "first_entry_at": 1771402686
-        },
         "108265929874123118551474872251380908889247403693521942345020228669909687840414": {
           "token_id": "108265929874123118551474872251380908889247403693521942345020228669909687840414",
           "title": "Will Islam Makhachev fight Carlos Prates next?",
@@ -5904,6 +5893,17 @@
           "unrealized_pnl": 2.3,
           "first_entry_at": 1793562357
         },
+        "17119154060762939837303153532154744480893515299339917817378655626147529788480": {
+          "token_id": "17119154060762939837303153532154744480893515299339917817378655626147529788480",
+          "title": "Will a new country join the Abraham Accords before 2027?",
+          "outcome": "Yes",
+          "size": 133.49,
+          "avg_price": 0.6429,
+          "current_price": 0.1265,
+          "value_usd": 16.89,
+          "unrealized_pnl": -68.95,
+          "first_entry_at": 1771402686
+        },
         "73107354886334329792382789688910189950565310055927988288216122180279671682891": {
           "token_id": "73107354886334329792382789688910189950565310055927988288216122180279671682891",
           "title": "Will Kyle Monangai have 449.5+ rushing yards in the 2026-27 NFL regular season?",
@@ -5932,9 +5932,9 @@
           "outcome": "Yes",
           "size": 20.0,
           "avg_price": 0.54,
-          "current_price": 0.79,
-          "value_usd": 15.8,
-          "unrealized_pnl": 5.0,
+          "current_price": 0.8,
+          "value_usd": 16.0,
+          "unrealized_pnl": 5.2,
           "first_entry_at": 1785882966
         },
         "71595597572331177572174114561028547434428831584911916791240746242586091264790": {
@@ -6014,17 +6014,6 @@
           "unrealized_pnl": 0.9,
           "first_entry_at": 1789932806
         },
-        "41311676442658299507290918459316458391870176132398042987680738479411072581703": {
-          "token_id": "41311676442658299507290918459316458391870176132398042987680738479411072581703",
-          "title": "Will Georgia Make the 2026-27 CFB Playoffs?",
-          "outcome": "Yes",
-          "size": 15.6,
-          "avg_price": 0.9535,
-          "current_price": 0.9065,
-          "value_usd": 14.14,
-          "unrealized_pnl": -0.73,
-          "first_entry_at": 1791690944
-        },
         "59257837972236483768216621494902878440403240139229506310859108513412248842605": {
           "token_id": "59257837972236483768216621494902878440403240139229506310859108513412248842605",
           "title": "Will Jayden Daniels have 2,999.5+ passing yards in the 2026-27 NFL regular season?",
@@ -6046,6 +6035,17 @@
           "value_usd": 13.97,
           "unrealized_pnl": 1.93,
           "first_entry_at": 1793390832
+        },
+        "41311676442658299507290918459316458391870176132398042987680738479411072581703": {
+          "token_id": "41311676442658299507290918459316458391870176132398042987680738479411072581703",
+          "title": "Will Georgia Make the 2026-27 CFB Playoffs?",
+          "outcome": "Yes",
+          "size": 15.6,
+          "avg_price": 0.9535,
+          "current_price": 0.8915,
+          "value_usd": 13.91,
+          "unrealized_pnl": -0.97,
+          "first_entry_at": 1791690944
         },
         "80119104929056703288541799780970704445500725096546706187687404134390360039157": {
           "token_id": "80119104929056703288541799780970704445500725096546706187687404134390360039157",
@@ -6201,17 +6201,6 @@
           "unrealized_pnl": -36.7,
           "first_entry_at": 1780334402
         },
-        "56185689725738732240781078839557830682354085200559477070936516010934042680657": {
-          "token_id": "56185689725738732240781078839557830682354085200559477070936516010934042680657",
-          "title": "Spread: Miami (FL) (-9.5)",
-          "outcome": "Notre Dame",
-          "size": 11.76,
-          "avg_price": 0.8857,
-          "current_price": 0.905,
-          "value_usd": 10.64,
-          "unrealized_pnl": 0.23,
-          "first_entry_at": 1793821033
-        },
         "703160914175153124679801167042946383934378035313835421800912262955424209866": {
           "token_id": "703160914175153124679801167042946383934378035313835421800912262955424209866",
           "title": "Will Juwan Johnson have 574.5+ receiving yards in the 2026-27 NFL regular season?",
@@ -6222,6 +6211,17 @@
           "value_usd": 10.6,
           "unrealized_pnl": -0.2,
           "first_entry_at": 1787063754
+        },
+        "56185689725738732240781078839557830682354085200559477070936516010934042680657": {
+          "token_id": "56185689725738732240781078839557830682354085200559477070936516010934042680657",
+          "title": "Spread: Miami (FL) (-9.5)",
+          "outcome": "Notre Dame",
+          "size": 11.76,
+          "avg_price": 0.8857,
+          "current_price": 0.9,
+          "value_usd": 10.58,
+          "unrealized_pnl": 0.17,
+          "first_entry_at": 1793821033
         },
         "21002992779851243817978128105476798137994653093242916655298479081011000504281": {
           "token_id": "21002992779851243817978128105476798137994653093242916655298479081011000504281",
@@ -6273,9 +6273,9 @@
           "outcome": "Yes",
           "size": 20.0,
           "avg_price": 0.66,
-          "current_price": 0.5025,
-          "value_usd": 10.05,
-          "unrealized_pnl": -3.15,
+          "current_price": 0.5035,
+          "value_usd": 10.07,
+          "unrealized_pnl": -3.13,
           "first_entry_at": 1790887298
         },
         "112836820521604139476365386567088814589053410591726963522283877542843258057157": {
@@ -6339,21 +6339,10 @@
           "outcome": "No",
           "size": 18.97,
           "avg_price": 0.5899,
-          "current_price": 0.4995,
+          "current_price": 0.5,
           "value_usd": 9.48,
-          "unrealized_pnl": -1.72,
+          "unrealized_pnl": -1.71,
           "first_entry_at": 1793569093
-        },
-        "56630345691428250237314128566017134644935324869597871530263912600908805013684": {
-          "token_id": "56630345691428250237314128566017134644935324869597871530263912600908805013684",
-          "title": "Will CJ Carr win the 2026 Heisman Trophy?",
-          "outcome": "Yes",
-          "size": 70.5555,
-          "avg_price": 0.1057,
-          "current_price": 0.1325,
-          "value_usd": 9.35,
-          "unrealized_pnl": 1.89,
-          "first_entry_at": 1787665470
         },
         "36914571390059244193097242095107109144448007804745187507546341246970684105102": {
           "token_id": "36914571390059244193097242095107109144448007804745187507546341246970684105102",
@@ -6376,6 +6365,17 @@
           "value_usd": 8.91,
           "unrealized_pnl": 0.7,
           "first_entry_at": 1789404520
+        },
+        "56630345691428250237314128566017134644935324869597871530263912600908805013684": {
+          "token_id": "56630345691428250237314128566017134644935324869597871530263912600908805013684",
+          "title": "Will CJ Carr win the 2026 Heisman Trophy?",
+          "outcome": "Yes",
+          "size": 70.5555,
+          "avg_price": 0.1057,
+          "current_price": 0.12,
+          "value_usd": 8.47,
+          "unrealized_pnl": 1.01,
+          "first_entry_at": 1787665470
         },
         "13559245257698522234168012847403798903035137188803782097433174045921952437021": {
           "token_id": "13559245257698522234168012847403798903035137188803782097433174045921952437021",
@@ -6526,9 +6526,9 @@
           "outcome": "Yes",
           "size": 130.0,
           "avg_price": 0.08,
-          "current_price": 0.032,
-          "value_usd": 4.16,
-          "unrealized_pnl": -6.24,
+          "current_price": 0.0315,
+          "value_usd": 4.09,
+          "unrealized_pnl": -6.3,
           "first_entry_at": 1790302493
         },
         "68188883778894643737666999837134635177844149024343830973943484234161550070146": {
@@ -6559,9 +6559,9 @@
           "outcome": "Yes",
           "size": 130.0,
           "avg_price": 0.293,
-          "current_price": 0.029,
-          "value_usd": 3.77,
-          "unrealized_pnl": -34.33,
+          "current_price": 0.0285,
+          "value_usd": 3.71,
+          "unrealized_pnl": -34.39,
           "first_entry_at": 1793689828
         },
         "52554701969138464785613610809736427872991295310488292214422253543962862833134": {
@@ -6592,10 +6592,21 @@
           "outcome": "Yes",
           "size": 32.79,
           "avg_price": 0.05,
-          "current_price": 0.044,
-          "value_usd": 1.44,
-          "unrealized_pnl": -0.2,
+          "current_price": 0.0435,
+          "value_usd": 1.43,
+          "unrealized_pnl": -0.21,
           "first_entry_at": 1777154962
+        },
+        "73618983706925965089719333176986438035515963449846597552621100694497431590844": {
+          "token_id": "73618983706925965089719333176986438035515963449846597552621100694497431590844",
+          "title": "Will LIV Golf announce shutdown in 2026? ",
+          "outcome": "No",
+          "size": 20.0,
+          "avg_price": 0.6069,
+          "current_price": 0.071,
+          "value_usd": 1.42,
+          "unrealized_pnl": -10.72,
+          "first_entry_at": 1788900810
         },
         "67434096485422898960094679900824428370678719833905981124759661668295489882630": {
           "token_id": "67434096485422898960094679900824428370678719833905981124759661668295489882630",
@@ -6608,39 +6619,6 @@
           "unrealized_pnl": -10.99,
           "first_entry_at": 1765728451
         },
-        "73618983706925965089719333176986438035515963449846597552621100694497431590844": {
-          "token_id": "73618983706925965089719333176986438035515963449846597552621100694497431590844",
-          "title": "Will LIV Golf announce shutdown in 2026? ",
-          "outcome": "No",
-          "size": 20.0,
-          "avg_price": 0.6069,
-          "current_price": 0.052,
-          "value_usd": 1.04,
-          "unrealized_pnl": -11.1,
-          "first_entry_at": 1788900810
-        },
-        "95682697540272664874656157760583899291510734937475957730857708697976917403783": {
-          "token_id": "95682697540272664874656157760583899291510734937475957730857708697976917403783",
-          "title": "Tariff increase on Canada in effect by December 31, 2026?",
-          "outcome": "Yes",
-          "size": 16.4,
-          "avg_price": 0.7911,
-          "current_price": 0.043,
-          "value_usd": 0.71,
-          "unrealized_pnl": -12.27,
-          "first_entry_at": 1787369758
-        },
-        "88147650905767922135479234790668469270322160819077146498430766921281855820188": {
-          "token_id": "88147650905767922135479234790668469270322160819077146498430766921281855820188",
-          "title": "Will Jalen Hurts have 199.5+ rushing yards in the 2026-27 NFL regular season?",
-          "outcome": "Yes",
-          "size": 33.33,
-          "avg_price": 0.836,
-          "current_price": 0.0175,
-          "value_usd": 0.58,
-          "unrealized_pnl": -27.28,
-          "first_entry_at": 1787062800
-        },
         "53980309552254752656853888092299477403267897422429296395260794844350132560294": {
           "token_id": "53980309552254752656853888092299477403267897422429296395260794844350132560294",
           "title": "Will David Sacks leave the Trump administration before 2027?",
@@ -6652,13 +6630,35 @@
           "unrealized_pnl": -5.93,
           "first_entry_at": 1774568321
         },
+        "88147650905767922135479234790668469270322160819077146498430766921281855820188": {
+          "token_id": "88147650905767922135479234790668469270322160819077146498430766921281855820188",
+          "title": "Will Jalen Hurts have 199.5+ rushing yards in the 2026-27 NFL regular season?",
+          "outcome": "Yes",
+          "size": 33.33,
+          "avg_price": 0.836,
+          "current_price": 0.0165,
+          "value_usd": 0.55,
+          "unrealized_pnl": -27.32,
+          "first_entry_at": 1787062800
+        },
+        "95682697540272664874656157760583899291510734937475957730857708697976917403783": {
+          "token_id": "95682697540272664874656157760583899291510734937475957730857708697976917403783",
+          "title": "Tariff increase on Canada in effect by December 31, 2026?",
+          "outcome": "Yes",
+          "size": 16.4,
+          "avg_price": 0.7911,
+          "current_price": 0.0325,
+          "value_usd": 0.53,
+          "unrealized_pnl": -12.44,
+          "first_entry_at": 1787369758
+        },
         "4274310553603736566486785899565424871651303818987087302859462265499335584347": {
           "token_id": "4274310553603736566486785899565424871651303818987087302859462265499335584347",
           "title": "Will the Chicago Bears leave Illinois by Dec. 31?",
           "outcome": "No",
           "size": 0.5,
           "avg_price": 0.8962,
-          "current_price": 0.875,
+          "current_price": 0.88,
           "value_usd": 0.44,
           "unrealized_pnl": -0.01,
           "first_entry_at": 1786757131
