@@ -301,7 +301,7 @@ CSS = """
 body {
   margin: 0; background: radial-gradient(1200px 500px at 50% -10%, #16233a 0%, var(--bg) 55%);
   color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-  "Microsoft YaHei", sans-serif; font-size: 12px;
+  "Microsoft YaHei", sans-serif; font-size: 12px; overflow-x: hidden;
 }
 a { color: var(--accent); text-decoration: none; }
 .topbar {
@@ -317,11 +317,11 @@ a { color: var(--accent); text-decoration: none; }
 .tabs a.active { background: #1d2b3d; color: var(--text); }
 .tabs a:hover { color: var(--text); }
 .meta { color: var(--faint); font-size: 10px; text-align: right; line-height: 1.6; }
-.grid { display: flex; gap: 0; padding: 16px 20px 28px; align-items: flex-start; overflow-x: auto; }
+.grid { display: flex; gap: 0; padding: 16px 20px 28px; align-items: flex-start; overflow: hidden; }
 .trader {
-  flex: 1 1 0; min-width: 300px;
+  flex: 1 1 0; min-width: 0;
   background: linear-gradient(180deg, rgba(22,32,45,.85), rgba(17,26,37,.85));
-  border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-width: 0;
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px;
 }
 .splitter {
   flex: 0 0 12px; align-self: stretch; cursor: col-resize; position: relative;
@@ -435,43 +435,49 @@ JS = """
     });
   });
 
-  // 分栏拖拽
+  // 分栏拖拽：保存的是"比例"而不是像素，三栏宽度之和永远等于容器宽度
   const grid = document.querySelector('.grid');
   const cols = Array.from(grid.querySelectorAll('.trader'));
   const splitters = Array.from(grid.querySelectorAll('.splitter'));
-  const KEY = 'copy-dash-widths';
+  const KEY = 'copy-dash-grow';
+  const applyGrow = (weights) => {
+    cols.forEach((c, i) => {
+      const w = weights && weights[i] ? weights[i] : 1;
+      c.style.flex = w + ' 1 0';
+    });
+  };
   const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
-  if (Array.isArray(saved) && saved.length === cols.length) {
-    cols.forEach((c, i) => { c.style.flex = '0 0 ' + saved[i] + 'px'; });
-  }
+  applyGrow(Array.isArray(saved) && saved.length === cols.length ? saved : null);
   splitters.forEach((sp, idx) => {
     sp.addEventListener('mousedown', (ev) => {
       ev.preventDefault();
-      const left = cols[idx], right = cols[idx + 1];
       const startX = ev.clientX;
-      const lw = left.getBoundingClientRect().width;
-      const rw = right.getBoundingClientRect().width;
+      const base = cols.map((c) => c.getBoundingClientRect().width);
+      const pair = base[idx] + base[idx + 1];
+      const total = base.reduce((a, b) => a + b, 0);
+      const MIN = 200;
       document.body.style.userSelect = 'none';
       const move = (e) => {
         const dx = e.clientX - startX;
-        const nl = Math.max(280, lw + dx);
-        const nr = Math.max(280, rw - dx);
-        left.style.flex = '0 0 ' + nl + 'px';
-        right.style.flex = '0 0 ' + nr + 'px';
+        const nl = Math.max(MIN, Math.min(base[idx] + dx, pair - MIN));
+        const nr = pair - nl;
+        const weights = base.map((w, i) => (i === idx ? nl : i === idx + 1 ? nr : w) / total);
+        applyGrow(weights);
       };
       const up = () => {
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
         document.body.style.userSelect = '';
-        const widths = cols.map((c) => Math.round(c.getBoundingClientRect().width));
-        localStorage.setItem(KEY, JSON.stringify(widths));
+        const widths = cols.map((c) => c.getBoundingClientRect().width);
+        const sum = widths.reduce((a, b) => a + b, 0) || 1;
+        localStorage.setItem(KEY, JSON.stringify(widths.map((w) => w / sum)));
       };
       document.addEventListener('mousemove', move);
       document.addEventListener('mouseup', up);
     });
     sp.addEventListener('dblclick', () => {
       localStorage.removeItem(KEY);
-      cols.forEach((c) => { c.style.flex = '1 1 0'; });
+      applyGrow(null);
     });
   });
 })();
