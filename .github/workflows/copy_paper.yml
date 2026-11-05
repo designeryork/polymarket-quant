@@ -1,0 +1,100 @@
+name: Copy Trading Paper (Cloud, 24/7)
+
+# ============================================================================
+# 跟单纸盘：盯 3 位交易员，每分钟拉一次持仓，按规则镜像到 3 个 $10 子账户。
+#
+# 与主策略 workflow 的关系
+# ----------------------------------------------------------------------------
+# * 完全独立：独立 concurrency 组、独立 5 小时轮次、独立账本分支（copy-ledger）；
+# * 共用同一个 Pages 面板仓：本 job 只写 copy.html，主 job 只写 index.html，
+#   推冲突时 copy_runner 会 pull --rebase 重试；
+# * 状态不写 master：账本落在 copy-ledger 分支（只追加），主分支只放代码。
+#
+# 为什么也是"长驻 job + 自续跑"
+# ----------------------------------------------------------------------------
+# GitHub cron 最短 5 分钟，无法直接每分钟触发。job 内部用 copy_runner.py
+# 每 60 秒轮询一次，跑满 5 小时后再触发下一轮，形成不断链。
+# ============================================================================
+
+on:
+  schedule:
+    # 每 5 小时的第 17 分钟触发（与主策略的 :07 错开，避免同时抢 Pages 仓）
+    - cron: '17 */5 * * *'
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: '本次连续运行多少小时（默认 5）'
+        required: false
+        default: '5'
+
+concurrency:
+  group: polymarket-copy-paper
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  copy-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      # ---- 纸盘：只读公开数据，不下任何真实订单 ----
+      PAPER: 'true'
+      ALLOW_LIVE: 'false'
+      ALLOW_DIRECT: 'true'
+      COPY_INTERVAL: '60'
+      RSS_LIMIT: ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Restore Copy Ledger
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python copy_ledger.py restore
+
+      - name: Run Copy Loop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_HOURS: ${{ github.event.inputs.hours || '5' }}
+          PAGES_REPO: ${{ secrets.PAGES_REPO }}
+          PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
+        run: |
+          python copy_runner.py \
+            --hours "$RUN_HOURS" \
+            --interval 60 \
+            --push-interval 300
+
+      - name: Push Copy Ledger (final)
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python copy_ledger.py push || echo "::warning::账本推送失败"
+
+      - name: Trigger Next Round
+        # 自续跑：固定 5 小时，不继承测试用的短时长
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sleep 20
+          gh workflow run copy_paper.yml --ref master -f hours=5 \
+            || echo "::warning::下一轮触发失败，等待 cron 兜底"

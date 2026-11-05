@@ -3270,6 +3270,7 @@ def generate_dashboard_html(state: Dict[str, Any], mode_key: Optional[str] = Non
         f'<a class="{_tab_class("hedge")}" href="dashboard_hedge.html">对冲</a>'
         f'<a class="{_tab_class("reverse")}" href="dashboard_reverse.html">反向持有</a>'
         f'<a class="{_tab_class("maker")}" href="dashboard_maker.html">反向挂单</a>'
+        '<a href="copy.html">跟单纸盘</a>'
         "</span>"
     )
 
