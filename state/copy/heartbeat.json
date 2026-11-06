@@ -1,16 +1,16 @@
 {
   "pid": 2506,
-  "updated_at": "2026-11-06 15:49:40 UTC",
+  "updated_at": "2026-11-06 15:56:10 UTC",
   "accounts": {
     "makeit99": {
-      "ok": true,
-      "error": "",
+      "ok": false,
+      "error": "RuntimeError: HTTP 429 https://data-api.polymarket.com/v2/positions",
       "positions": 0,
       "cash_usd": 10.0087
     },
     "supersmard": {
-      "ok": true,
-      "error": "",
+      "ok": false,
+      "error": "RuntimeError: HTTP 429 https://data-api.polymarket.com/v2/positions",
       "positions": 1,
       "cash_usd": 6.2794
     },
