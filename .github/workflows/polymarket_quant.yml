@@ -124,6 +124,20 @@ jobs:
         run: |
           python sync_state.py push || echo "::warning::状态快照推送失败"
 
+      - name: Upload Research Logs
+        # 测量补丁（2026-11-06）：只把研究日志做成 artifact，不改策略/参数/账本。
+        # 30 天保留；本地 sync_research.py --repo designeryork/polymarket-quant 拉取。
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-logs-v1-${{ github.run_id }}
+          path: |
+            logs/strategy_research_samples.jsonl
+            logs/signals_and_skips.jsonl
+            logs/trading_errors.jsonl
+          retention-days: 30
+          if-no-files-found: warn
+
       - name: Trigger Next Round
         # 自续跑：立刻触发下一轮，消掉 5 小时 cron 之间的间隙。
         # 固定用 5 小时，不继承上一轮的 hours —— 否则测试用的短时长
