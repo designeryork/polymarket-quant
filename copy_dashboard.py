@@ -194,10 +194,11 @@ def chart_data(histories: Dict[str, List[Dict[str, float]]]) -> Dict[str, List[L
 def ours_rows(account: Dict[str, Any]) -> str:
     positions = list((account.get("positions") or {}).values())
     if not positions:
-        return '<tr><td colspan="7" class="empty">暂无跟单持仓（等待对方开新仓）</td></tr>'
+        return '<tr><td colspan="8" class="empty">暂无跟单持仓（等待对方开新仓）</td></tr>'
     rows = []
     for p in sorted(positions, key=lambda x: -float(x.get("shares") or 0)):
         shares = float(p.get("shares") or 0.0)
+        entry = float(p.get("entry_price") or p.get("avg_price") or 0.0)
         avg = float(p.get("avg_price") or 0.0)
         mark = float(p.get("last_mark_price") or 0.0)
         value = shares * mark
@@ -209,6 +210,7 @@ def ours_rows(account: Dict[str, Any]) -> str:
           <td class="q-cell" title="{esc(p.get('title'))}">{esc(p.get('title'))}</td>
           <td><span class="badge">{esc(p.get('outcome'))}</span></td>
           <td>{shares:.2f}</td>
+          <td>{entry:.3f}</td>
           <td>{avg:.3f}</td>
           <td>{mark:.3f}</td>
           <td>${value:.2f}</td>
@@ -220,7 +222,7 @@ def ours_rows(account: Dict[str, Any]) -> str:
 def target_rows(account: Dict[str, Any]) -> str:
     positions = list((account.get("target_positions") or {}).values())
     if not positions:
-        return '<tr><td colspan="6" class="empty">对方当前无持仓</td></tr>'
+        return '<tr><td colspan="7" class="empty">对方当前无持仓</td></tr>'
     rows = []
     for p in sorted(positions, key=lambda x: -float(x.get("value_usd") or 0)):
         pnl = float(p.get("unrealized_pnl") or 0.0)
@@ -230,6 +232,7 @@ def target_rows(account: Dict[str, Any]) -> str:
           <td><span class="badge">{esc(p.get('outcome'))}</span></td>
           <td>{float(p.get('size') or 0):.2f}</td>
           <td>{float(p.get('avg_price') or 0):.3f}</td>
+          <td>{float(p.get('current_price') or 0):.3f}</td>
           <td>${float(p.get('value_usd') or 0):.2f}</td>
           <td class="{pnl_class(pnl)}">${fmt_signed(pnl)}</td>
         </tr>""")
@@ -317,7 +320,7 @@ def trader_column(trader: Dict[str, str], account: Dict[str, Any],
       <div class="card-title"><span>当前持仓明细</span><em>跟单仓 · 买一计价</em></div>
       <div class="scroll">
         <table>
-          <thead><tr><th>市场</th><th>方向</th><th>份额</th><th>均价</th><th>现价</th><th>市值</th><th>浮盈亏</th></tr></thead>
+          <thead><tr><th>市场</th><th>方向</th><th>份额</th><th>买入价</th><th>均价</th><th>现价</th><th>市值</th><th>浮盈亏</th></tr></thead>
           <tbody>{ours_rows(account)}</tbody>
         </table>
       </div>
@@ -327,7 +330,7 @@ def trader_column(trader: Dict[str, str], account: Dict[str, Any],
       <div class="card-title"><span>对手持仓明细</span><em>{esc(trader['name'])} 实盘</em></div>
       <div class="scroll">
         <table>
-          <thead><tr><th>市场</th><th>方向</th><th>份额</th><th>均价</th><th>市值</th><th>浮盈亏</th></tr></thead>
+          <thead><tr><th>市场</th><th>方向</th><th>份额</th><th>买入均价</th><th>现价</th><th>市值</th><th>浮盈亏</th></tr></thead>
           <tbody>{target_rows(account)}</tbody>
         </table>
       </div>

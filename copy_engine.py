@@ -165,7 +165,40 @@ def load_state() -> Dict[str, Any]:
         # 老账本没有平仓列表：从事件流回填我方平仓记录（只做一次）
         if not account["closed_trades"]:
             account["closed_trades"] = _ours_closed_from_events(trader["id"])
+        # 老账本没有「首次买入价」：从事件流回填（加仓不会改它）
+        missing = [t for t, pos in (account.get("positions") or {}).items()
+                   if not pos.get("entry_price")]
+        if missing:
+            prices = _entry_prices_from_events(trader["id"])
+            for token in missing:
+                if token in prices:
+                    account["positions"][token]["entry_price"] = prices[token]
     return data
+
+
+def _entry_prices_from_events(trader_id: str) -> Dict[str, float]:
+    """从事件流里找每个 token 的首次建仓价（COPY_BUY / reason=OPEN）。"""
+    if not EVENTS_FILE.exists():
+        return {}
+    prices: Dict[str, float] = {}
+    try:
+        for line in EVENTS_FILE.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if event.get("trader") != trader_id or event.get("type") != "COPY_BUY":
+                continue
+            if event.get("reason") != "OPEN":
+                continue
+            token = str(event.get("token") or "")
+            if token and token not in prices:
+                prices[token] = float(event.get("price") or 0.0)
+    except Exception:
+        return prices
+    return prices
 
 
 MAX_CLOSED_KEEP = 50
@@ -557,7 +590,8 @@ def _open_position(account: Dict[str, Any], trader_id: str,
         "outcome_index": int(target.get("outcome_index") or 0),
         "shares": shares,
         "cost_usd": cost,
-        "avg_price": money(ask),
+        "entry_price": money(ask),   # 首次建仓成交价（加仓不改）
+        "avg_price": money(ask),     # 摊薄后的持仓成本
         "opened_at": utc_now(),
         "target_size_at_entry": target_size,
         "ratio": shares / target_size if target_size > 0 else 0.0,
