@@ -588,7 +588,7 @@ def render(state: Dict[str, Any], history: Optional[Dict[str, List[Dict[str, flo
     </nav>
   </div>
   <div class="meta">
-    <div>每分钟轮询 · 三账户各 $10</div>
+    <div>每分钟轮询 · {len(engine.TRADERS)} 个账户各 ${engine.STARTING_CASH_USD:.0f}</div>
     <div>最后更新 {esc(updated)}</div>
   </div>
 </header>
