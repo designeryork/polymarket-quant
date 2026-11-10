@@ -84,6 +84,12 @@ TRADERS: Tuple[Dict[str, str], ...] = (
         "address": "0xc2ad03f79ca3f3c17d8c7de2612ce0c89b7d40ed",
         "profile": "https://polymarket.com/@bosona",
     },
+    {
+        "id": "norm1e69",
+        "name": "norm1e69",
+        "address": "0x41e2e1ccf1e4940029af02259a31c6b89b9fa354",
+        "profile": "https://polymarket.com/@norm1e69",
+    },
 )
 
 
