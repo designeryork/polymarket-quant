@@ -83,6 +83,8 @@ TRADERS: Tuple[Dict[str, str], ...] = (
         "name": "bosona",
         "address": "0xc2ad03f79ca3f3c17d8c7de2612ce0c89b7d40ed",
         "profile": "https://polymarket.com/@bosona",
+        # 高频小单策略：单笔只动用 1/5 现金，避免 3 笔就打满
+        "cash_fraction": 0.20,
     },
     {
         "id": "norm1e69",
@@ -128,6 +130,8 @@ def empty_account(trader: Dict[str, str]) -> Dict[str, Any]:
         "profile": trader["profile"],
         "starting_cash_usd": STARTING_CASH_USD,
         "cash_usd": STARTING_CASH_USD,
+        "cash_fraction": float(trader.get("cash_fraction") or CASH_FRACTION),
+        "topup_usd": 0.0,
         "realized_pnl_usd": 0.0,
         "positions": {},
         "baseline_sizes": {},
@@ -154,13 +158,19 @@ def empty_state() -> Dict[str, Any]:
 
 def load_state() -> Dict[str, Any]:
     if not STATE_FILE.exists():
-        return empty_state()
+        data = empty_state()
+        _apply_migrations(data)
+        return data
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
-        return empty_state()
+        data = empty_state()
+        _apply_migrations(data)
+        return data
     if not isinstance(data, dict) or "accounts" not in data:
-        return empty_state()
+        data = empty_state()
+        _apply_migrations(data)
+        return data
     # 新增交易员时自动补齐，不破坏已有账本
     for trader in TRADERS:
         data["accounts"].setdefault(trader["id"], empty_account(trader))
@@ -179,7 +189,49 @@ def load_state() -> Dict[str, Any]:
             for token in missing:
                 if token in prices:
                     account["positions"][token]["entry_price"] = prices[token]
+        # 单笔比例以配置为准（改配置即生效，不用改账本）
+        account["cash_fraction"] = float(trader.get("cash_fraction") or CASH_FRACTION)
+        account.setdefault("topup_usd", 0.0)
+    _apply_migrations(data)
     return data
+
+
+# ---------------------------------------------------------------------------
+# 一次性账务迁移：只执行一次，执行过就写进 state["migrations"]
+# ---------------------------------------------------------------------------
+def _migrate_bosona_topup(state: Dict[str, Any], amount: float = 100.0) -> None:
+    """给 bosona 充值：现金与本金同时 +amount，总盈亏口径保持不变。"""
+    account = state["accounts"].get("bosona")
+    if not account:
+        return
+    account["cash_usd"] = money(float(account.get("cash_usd") or 0.0) + amount)
+    account["starting_cash_usd"] = money(
+        float(account.get("starting_cash_usd") or STARTING_CASH_USD) + amount
+    )
+    account["topup_usd"] = money(float(account.get("topup_usd") or 0.0) + amount)
+    append_event({
+        "type": "TOPUP", "trader": "bosona", "amount": amount,
+        "cash_after": account["cash_usd"],
+        "starting_cash_after": account["starting_cash_usd"],
+    })
+
+
+MIGRATIONS = (
+    ("bosona_topup_100_20261110", _migrate_bosona_topup),
+)
+
+
+def _apply_migrations(state: Dict[str, Any]) -> None:
+    done = set(state.get("migrations") or [])
+    changed = False
+    for name, fn in MIGRATIONS:
+        if name in done:
+            continue
+        fn(state)
+        done.add(name)
+        changed = True
+    if changed:
+        state["migrations"] = sorted(done)
 
 
 def _entry_prices_from_events(trader_id: str) -> Dict[str, float]:
@@ -575,9 +627,10 @@ def _open_position(account: Dict[str, Any], trader_id: str,
                      slippage=round(ask - target_avg, 4))
         return
     cash = float(account.get("cash_usd") or 0.0)
-    spend = min(cash * CASH_FRACTION, book["ask_depth_usdc"])
+    fraction = float(account.get("cash_fraction") or CASH_FRACTION)
+    spend = min(cash * fraction, book["ask_depth_usdc"])
     if spend < MIN_ORDER_USD:
-        reason = "INSUFFICIENT_CASH" if cash * CASH_FRACTION < MIN_ORDER_USD else "DEPTH_TOO_THIN"
+        reason = "INSUFFICIENT_CASH" if cash * fraction < MIN_ORDER_USD else "DEPTH_TOO_THIN"
         _record_skip(trader_id, token, target, reason,
                      cash=round(cash, 4), depth_usd=round(book["ask_depth_usdc"], 2))
         return

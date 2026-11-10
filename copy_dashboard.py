@@ -104,14 +104,17 @@ def chart_view(trader_id: str, gran: str, points: List[Dict[str, float]],
         return (f'<div class="chart-view" data-gran="{gran}"'
                 f'{" hidden" if not active else ""}><div class="chart-empty">暂无净值数据</div></div>')
 
-    lo = min(values + [start_value])
-    hi = max(values + [start_value])
+    lo = min(values)
+    hi = max(values)
     if abs(hi - lo) < 1e-6:
         lo -= 0.1
         hi += 0.1
     span = hi - lo
     lo -= span * 0.06
     hi += span * 0.06
+    # 充值后本金会远高于净值：只在范围内画本金线，避免把曲线压扁
+    base_visible = lo <= start_value <= hi
+    base_y = _y_at(start_value, lo, hi) if base_visible else 0.0
 
     n = len(values)
     coords = [(_x_at(i, n), _y_at(v, lo, hi)) for i, v in enumerate(values)]
@@ -121,7 +124,12 @@ def chart_view(trader_id: str, gran: str, points: List[Dict[str, float]],
     rising = values[-1] >= start_value
     stroke = "#34d399" if rising else "#fb7185"
     gid = f"g{abs(hash((trader_id, gran))) % 100000}"
-    base_y = _y_at(start_value, lo, hi)
+    base_line = (
+        f'<line x1="{PAD_L}" y1="{base_y:.1f}" x2="{W - PAD_R}" y2="{base_y:.1f}" '
+        f'stroke="#64748b" stroke-width=".8" stroke-dasharray="3 3"/>'
+        if base_visible else ""
+    )
+    range_note = f"<span>本金 ${start_value:.2f}</span>" if base_visible else "<span></span>"
     dots = ""
     if n <= 80:
         dots = "".join(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.7" fill="{stroke}" opacity=".85"/>'
@@ -146,15 +154,14 @@ def chart_view(trader_id: str, gran: str, points: List[Dict[str, float]],
           <stop offset="100%" stop-color="{stroke}" stop-opacity="0"/>
         </linearGradient></defs>
         {ticks}
-        <line x1="{PAD_L}" y1="{base_y:.1f}" x2="{W - PAD_R}" y2="{base_y:.1f}"
-              stroke="#64748b" stroke-width=".8" stroke-dasharray="3 3"/>
+        {base_line}
         <polygon points="{area}" fill="url(#{gid})"/>
         <polyline points="{line}" fill="none" stroke="{stroke}" stroke-width="1.6"
                   stroke-linejoin="round" stroke-linecap="round"/>
         {dots}
       </svg>
       <div class="chart-axis">{labels}</div>
-      <div class="chart-range"><span>${lo:.2f}</span><span>本金 ${start_value:.2f}</span><span>${hi:.2f}</span></div>
+      <div class="chart-range"><span>${lo:.2f}</span>{range_note}<span>${hi:.2f}</span></div>
     </div>"""
 
 
@@ -296,6 +303,9 @@ def trader_column(trader: Dict[str, str], account: Dict[str, Any],
     ok = account.get("last_poll_ok")
     status = '<span class="dot ok"></span>正常' if ok else '<span class="dot bad"></span>异常'
     start = float(account.get("starting_cash_usd") or 10.0)
+    topup = float(account.get("topup_usd") or 0.0)
+    principal_note = f"本金 ${start:.2f}" + (f" · 充值 +${topup:.0f}" if topup > 0 else "")
+    fraction = float(account.get("cash_fraction") or 0.5)
 
     return f"""
   <section class="trader">
@@ -308,9 +318,9 @@ def trader_column(trader: Dict[str, str], account: Dict[str, Any],
     </header>
 
     <div class="kpis">
-      <div class="kpi"><label>账户价值</label><b>${equity:.2f}</b><i>本金 ${start:.2f}</i></div>
+      <div class="kpi"><label>账户价值</label><b>${equity:.2f}</b><i>{principal_note}</i></div>
       <div class="kpi"><label>总盈亏</label><b class="{pnl_class(pnl)}">${fmt_signed(pnl)}</b><i class="{pnl_class(pnl)}">{fmt_signed(pct, 1)}%</i></div>
-      <div class="kpi"><label>可用现金</label><b>${cash:.2f}</b><i>现金比例 {cash / max(1e-9, equity) * 100:.0f}%</i></div>
+      <div class="kpi"><label>可用现金</label><b>${cash:.2f}</b><i>现金比例 {cash / max(1e-9, equity) * 100:.0f}% · 单笔 {fraction * 100:.0f}%</i></div>
       <div class="kpi"><label>持仓</label><b>{count}</b><i>对方 {target_count} 个</i></div>
     </div>
 
@@ -591,7 +601,7 @@ def render(state: Dict[str, Any], history: Optional[Dict[str, List[Dict[str, flo
     </nav>
   </div>
   <div class="meta">
-    <div>每分钟轮询 · {len(engine.TRADERS)} 个账户各 ${engine.STARTING_CASH_USD:.0f}</div>
+    <div>每分钟轮询 · {len(engine.TRADERS)} 个账户</div>
     <div>最后更新 {esc(updated)}</div>
   </div>
 </header>
