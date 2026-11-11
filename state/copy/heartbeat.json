@@ -1,6 +1,6 @@
 {
   "pid": 2300,
-  "updated_at": "2026-11-11 06:59:55 UTC",
+  "updated_at": "2026-11-11 07:05:34 UTC",
   "accounts": {
     "makeit99": {
       "ok": true,
@@ -21,8 +21,8 @@
       "cash_usd": 1.0733
     },
     "bosona": {
-      "ok": false,
-      "error": "ReadTimeout: HTTPSConnectionPool(host='data-api.polymarket.com', port=443): Read timed out. (read timeout=20.0)",
+      "ok": true,
+      "error": "",
       "positions": 0,
       "cash_usd": 1.3215
     },
