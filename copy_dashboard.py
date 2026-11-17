@@ -187,11 +187,14 @@ def chart_data(histories: Dict[str, List[Dict[str, float]]]) -> Dict[str, List[L
     """给前端悬停用的点集：{"trader|gran": [[ts, value], ...]}"""
     now = int(time.time())
     out: Dict[str, List[List[float]]] = {}
-    for trader_id, history in histories.items():
+    # 只输出当前跟单列表里的账户（已替换掉的对象仍留在净值文件里，不必带进页面）
+    for trader in engine.TRADERS:
+        history = histories.get(trader["id"]) or []
         for gran, seconds in WINDOWS:
             pts = window_points(history, seconds, now)
-            out[f"{trader_id}|{gran}"] = [[int(p.get("t") or 0), round(float(p.get("e") or 0.0), 4)]
-                                          for p in pts]
+            out[f"{trader['id']}|{gran}"] = [
+                [int(p.get("t") or 0), round(float(p.get("e") or 0.0), 4)] for p in pts
+            ]
     return out
 
 
