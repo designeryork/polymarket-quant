@@ -230,8 +230,10 @@ def target_rows(account: Dict[str, Any]) -> str:
     positions = list((account.get("target_positions") or {}).values())
     if not positions:
         return '<tr><td colspan="7" class="empty">对方当前无持仓</td></tr>'
+    # 只展示市值前 50（bonereaper 这类账户有几百上千个灰尘仓位）
+    positions = sorted(positions, key=lambda x: -float(x.get("value_usd") or 0))[:50]
     rows = []
-    for p in sorted(positions, key=lambda x: -float(x.get("value_usd") or 0)):
+    for p in positions:
         pnl = float(p.get("unrealized_pnl") or 0.0)
         rows.append(f"""
         <tr>

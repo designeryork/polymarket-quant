@@ -43,6 +43,7 @@ CLOB_HOST = os.getenv("CLOB_HOST", "https://clob.polymarket.com")
 STARTING_CASH_USD = 10.0
 CASH_FRACTION = 0.5          # 首次开仓用可用现金的 50%
 MIN_ORDER_USD = 1.0          # Polymarket 最小下单金额
+MIN_TARGET_USD = 1.0         # 目标仓位当前市值低于此值视为灰尘，不跟
 EPS = 1e-6
 MAX_COPY_LAG_SEC = 900       # 断线超过 15 分钟，新开仓不再补跟，只记 MISSED_STALE
 
@@ -79,12 +80,16 @@ TRADERS: Tuple[Dict[str, str], ...] = (
         "profile": "https://polymarket.com/@Robbb",
     },
     {
-        "id": "bosona",
-        "name": "bosona",
-        "address": "0xc2ad03f79ca3f3c17d8c7de2612ce0c89b7d40ed",
-        "profile": "https://polymarket.com/@bosona",
-        # 高频小单策略：单笔只动用 1/5 现金，避免 3 笔就打满
-        "cash_fraction": 0.20,
+        "id": "bonereaper",
+        "name": "bonereaper",
+        "address": "0xeebde7a0e019a63e6b476eb425505b7b3e6eba30",
+        "profile": "https://polymarket.com/@bonereaper",
+        # 独立本金 $100，单笔用 1/10 现金
+        "starting_cash_usd": 100.0,
+        "cash_fraction": 0.10,
+        # 他账上 6000+ 个仓位（绝大多数是 5 分钟盘的灰尘）；
+        # 接口按当前市值降序，第 1 页就覆盖几乎全部价值，抓 3 页足够
+        "max_position_pages": 3,
     },
     {
         "id": "norm1e69",
@@ -128,8 +133,8 @@ def empty_account(trader: Dict[str, str]) -> Dict[str, Any]:
         "name": trader["name"],
         "address": trader["address"],
         "profile": trader["profile"],
-        "starting_cash_usd": STARTING_CASH_USD,
-        "cash_usd": STARTING_CASH_USD,
+        "starting_cash_usd": float(trader.get("starting_cash_usd") or STARTING_CASH_USD),
+        "cash_usd": float(trader.get("starting_cash_usd") or STARTING_CASH_USD),
         "cash_fraction": float(trader.get("cash_fraction") or CASH_FRACTION),
         "topup_usd": 0.0,
         "realized_pnl_usd": 0.0,
@@ -216,8 +221,17 @@ def _migrate_bosona_topup(state: Dict[str, Any], amount: float = 100.0) -> None:
     })
 
 
+def _migrate_remove_bosona(state: Dict[str, Any]) -> None:
+    """2026-11-17 用户把跟单对象由 bosona 换成 bonereaper：移除旧账户。
+
+    历史事件与净值文件保持只追加，不删除，仍可用于复盘。
+    """
+    state["accounts"].pop("bosona", None)
+
+
 MIGRATIONS = (
     ("bosona_topup_100_20261110", _migrate_bosona_topup),
+    ("remove_bosona_20261117", _migrate_remove_bosona),
 )
 
 
@@ -895,6 +909,9 @@ def reconcile_account(session: requests.Session, account: Dict[str, Any],
             # 零回填：上线时已存在的仓位永远不跟（即使对方之后加仓，也没有基准比例）
             if token in baseline:
                 continue
+            # 灰尘仓位（大量已归零的 5 分钟盘）不跟，避免把钱撒在没流动性的 token 上
+            if float(target.get("current_value") or 0.0) < MIN_TARGET_USD:
+                continue
             if lag_sec > MAX_COPY_LAG_SEC:
                 _record_skip(trader_id, token, target, "MISSED_STALE", lag_sec=lag_sec)
                 continue
@@ -979,7 +996,8 @@ def run_cycle(session: requests.Session, state: Dict[str, Any]) -> Dict[str, Any
     for trader in TRADERS:
         account = state["accounts"][trader["id"]]
         try:
-            targets = fetch_positions(session, trader["address"], "OPEN")
+            targets = fetch_positions(session, trader["address"], "OPEN",
+                                      int(trader.get("max_position_pages") or 20))
         except Exception as exc:
             account["last_poll_ok"] = False
             account["last_error"] = f"{type(exc).__name__}: {exc}"
