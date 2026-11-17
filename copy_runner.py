@@ -133,6 +133,15 @@ def main() -> int:
     args = parser.parse_args()
 
     copy_ledger.restore()
+    # 一次性瘦身：旧版 events.jsonl 每条跳过都写一行，12 天涨到 104 MB，
+    # 直接把 git 推送拖垮。这里只保留交易类事件并转成 gzip 归档。
+    try:
+        result = engine.compact_legacy_events()
+        if not result.get("skipped"):
+            log(f"事件日志瘦身：扫描 {result.get('scanned')} 行，保留 {result.get('kept')} 条，"
+                f"归档 {result.get('archive_bytes', 0) / 1024:.0f} KB")
+    except Exception as exc:
+        log(f"事件日志瘦身失败：{type(exc).__name__}: {exc}")
     run(args.hours, args.interval, args.push_interval)
     return 0
 

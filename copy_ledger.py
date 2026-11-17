@@ -127,16 +127,26 @@ def push(message: Optional[str] = None) -> bool:
     if staged.returncode == 0:
         _log("账本无变化，跳过提交")
         return True
-    commit = _git(["commit", "-q", "-m", message or "update copy ledger"], WORK_DIR, check=False)
-    if commit.returncode != 0:
-        _log(f"提交失败：{(commit.stderr or '').strip()[:160]}")
+    # 永远只保留 1 个提交（无父提交）+ 强制推送。
+    # 原因：state.json 每 5 分钟变一次，普通提交把分支堆到 1000+ 提交、上百 MB，
+    # 最终 fetch/push 直接失败（2026-11-17 实测）。数据本身在 events/equity
+    # 只追加文件里完整保留，丢掉的只是提交历史。
+    tree = _git(["write-tree"], WORK_DIR, check=False)
+    if tree.returncode != 0:
+        _log(f"write-tree 失败：{(tree.stderr or '').strip()[:160]}")
         return False
-    result = _git(["push", "origin", f"HEAD:{BRANCH}"], WORK_DIR, check=False)
+    commit = _git(["commit-tree", tree.stdout.strip(), "-m", message or "update copy ledger"],
+                  WORK_DIR, check=False)
+    if commit.returncode != 0:
+        _log(f"commit-tree 失败：{(commit.stderr or '').strip()[:160]}")
+        return False
+    sha = commit.stdout.strip()
+    _git(["update-ref", f"refs/heads/{BRANCH}", sha], WORK_DIR, check=False)
+    result = _git(["push", "--force", "origin", f"{sha}:refs/heads/{BRANCH}"], WORK_DIR, check=False)
     if result.returncode != 0:
-        # 偶发远端领先：拉一次再推
+        # 偶发远端领先：重新抓一次再推
         _git(["fetch", "origin", BRANCH], WORK_DIR, check=False)
-        _git(["reset", "--soft", "FETCH_HEAD"], WORK_DIR, check=False)
-        result = _git(["push", "origin", f"HEAD:{BRANCH}"], WORK_DIR, check=False)
+        result = _git(["push", "--force", "origin", f"HEAD:{BRANCH}"], WORK_DIR, check=False)
     if result.returncode != 0:
         _log(f"推送失败：{(result.stderr or '').strip()[:160]}")
         return False

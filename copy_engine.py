@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,23 @@ import requests
 BASE = Path(__file__).resolve().parent
 STATE_DIR = BASE / "state" / "copy"
 STATE_FILE = STATE_DIR / "state.json"
-EVENTS_FILE = STATE_DIR / "events.jsonl"
+EVENTS_FILE = STATE_DIR / "events.jsonl"      # 旧版单文件（仅用于迁移与兼容读取）
+EVENTS_DIR = STATE_DIR / "events"             # 新版：按天分文件，避免单文件无限膨胀
+
+
+def _events_path() -> Path:
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return EVENTS_DIR / f"{day}.jsonl"
+
+
+def iter_event_files() -> List[Path]:
+    """所有事件文件（旧的单文件排在最前，新的一天一个文件）。"""
+    files: List[Path] = []
+    if EVENTS_FILE.exists():
+        files.append(EVENTS_FILE)
+    if EVENTS_DIR.exists():
+        files.extend(sorted(EVENTS_DIR.glob("*.jsonl")))
+    return files
 EQUITY_DIR = STATE_DIR / "equity"
 HEARTBEAT_FILE = STATE_DIR / "heartbeat.json"
 
@@ -250,24 +267,26 @@ def _apply_migrations(state: Dict[str, Any]) -> None:
 
 def _entry_prices_from_events(trader_id: str) -> Dict[str, float]:
     """从事件流里找每个 token 的首次建仓价（COPY_BUY / reason=OPEN）。"""
-    if not EVENTS_FILE.exists():
+    files = iter_event_files()
+    if not files:
         return {}
     prices: Dict[str, float] = {}
     try:
-        for line in EVENTS_FILE.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-            except Exception:
-                continue
-            if event.get("trader") != trader_id or event.get("type") != "COPY_BUY":
-                continue
-            if event.get("reason") != "OPEN":
-                continue
-            token = str(event.get("token") or "")
-            if token and token not in prices:
-                prices[token] = float(event.get("price") or 0.0)
+        for path in files:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if event.get("trader") != trader_id or event.get("type") != "COPY_BUY":
+                    continue
+                if event.get("reason") != "OPEN":
+                    continue
+                token = str(event.get("token") or "")
+                if token and token not in prices:
+                    prices[token] = float(event.get("price") or 0.0)
     except Exception:
         return prices
     return prices
@@ -277,37 +296,39 @@ MAX_CLOSED_KEEP = 50
 
 
 def _ours_closed_from_events(trader_id: str) -> List[Dict[str, Any]]:
-    """从 events.jsonl 回填我方平仓记录（页面首次上线时用）。"""
-    if not EVENTS_FILE.exists():
+    """从事件流回填我方平仓记录（页面首次上线时用）。"""
+    files = iter_event_files()
+    if not files:
         return []
     records: List[Dict[str, Any]] = []
     try:
-        for line in EVENTS_FILE.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-            except Exception:
-                continue
-            if event.get("trader") != trader_id:
-                continue
-            if event.get("type") not in ("COPY_SELL", "COPY_SETTLE"):
-                continue
-            shares = float(event.get("shares") or 0.0)
-            usd = float(event.get("usd") or 0.0)
-            realized = float(event.get("realized_pnl") or 0.0)
-            records.append({
-                "title": event.get("title") or "",
-                "outcome": event.get("outcome") or "",
-                "shares": round(shares, 4),
-                "avg_price": round((usd - realized) / shares, 4) if shares > 0 else 0.0,
-                "exit_price": round(usd / shares, 4) if shares > 0 else 0.0,
-                "realized_pnl": round(realized, 4),
-                "reason": event.get("reason") or "",
-                "closed_at": int(event.get("ts") or 0),
-            })
+        for path in files:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if event.get("trader") != trader_id:
+                    continue
+                if event.get("type") not in ("COPY_SELL", "COPY_SETTLE"):
+                    continue
+                shares = float(event.get("shares") or 0.0)
+                usd = float(event.get("usd") or 0.0)
+                realized = float(event.get("realized_pnl") or 0.0)
+                records.append({
+                    "title": event.get("title") or "",
+                    "outcome": event.get("outcome") or "",
+                    "shares": round(shares, 4),
+                    "avg_price": round((usd - realized) / shares, 4) if shares > 0 else 0.0,
+                    "exit_price": round(usd / shares, 4) if shares > 0 else 0.0,
+                    "realized_pnl": round(realized, 4),
+                    "reason": event.get("reason") or "",
+                    "closed_at": int(event.get("ts") or 0),
+                })
     except Exception:
-        return []
+        return records[-MAX_CLOSED_KEEP:][::-1]
     return records[-MAX_CLOSED_KEEP:][::-1]
 
 
@@ -325,12 +346,55 @@ def save_state(state: Dict[str, Any]) -> None:
 
 
 def append_event(event: Dict[str, Any]) -> None:
-    """事件流：只追加，不覆盖，供事后分析。"""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    """事件流：只追加，不覆盖；按天分文件，避免单文件膨胀到上百 MB。"""
+    path = _events_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     event.setdefault("ts", ts_now())
     event.setdefault("time", utc_now())
-    with EVENTS_FILE.open("a", encoding="utf-8") as fh:
+    with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+SKIP_KEEP_TYPES = {"COPY_BUY", "COPY_SELL", "COPY_SETTLE", "TOPUP",
+                   "BASELINE", "TARGET_CLOSED", "TARGET_CLOSED_BACKFILL"}
+
+
+def compact_legacy_events(max_lines: int = 5_000_000) -> Dict[str, Any]:
+    """一次性把旧版 events.jsonl 瘦身。
+
+    历史上每轮把每个跳过原因都写成一条事件（5 位交易员 × 每分钟数十条），
+    12 天就涨到 104 MB，导致 git 推送/拉取失败。这里只保留交易类事件，
+    其余（COPY_SKIP 等噪音）丢弃，并改写为 gzip 归档。
+    """
+    if not EVENTS_FILE.exists():
+        return {"skipped": True}
+    import gzip
+
+    kept = 0
+    total = 0
+    tmp = STATE_DIR / "events-compact.jsonl.tmp"
+    with EVENTS_FILE.open("r", encoding="utf-8", errors="replace") as src, tmp.open("w", encoding="utf-8") as dst:
+        for line in src:
+            total += 1
+            if total > max_lines:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if event.get("type") not in SKIP_KEEP_TYPES:
+                continue
+            dst.write(json.dumps(event, ensure_ascii=False) + "\n")
+            kept += 1
+    archive = STATE_DIR / "events-archive.jsonl.gz"
+    with tmp.open("rb") as src, gzip.open(archive, "wb", compresslevel=9) as dst:
+        shutil.copyfileobj(src, dst)
+    tmp.unlink(missing_ok=True)
+    EVENTS_FILE.unlink(missing_ok=True)
+    return {"scanned": total, "kept": kept, "archive_bytes": archive.stat().st_size}
 
 
 def append_equity(state: Dict[str, Any], marks: Dict[str, float]) -> None:
@@ -606,16 +670,22 @@ def account_summary(account: Dict[str, Any], marks: Optional[Dict[str, float]] =
 # ==========================================================
 # 镜像逻辑
 # ==========================================================
+# 跳过原因按轮聚合：每分钟几十条明细曾把事件文件撑到 104 MB
+_SKIP_COUNTS: Dict[str, int] = {}
+
+
 def _record_skip(trader_id: str, token: str, target: Dict[str, Any], reason: str, **extra: Any) -> None:
-    append_event({
-        "type": "COPY_SKIP",
-        "trader": trader_id,
-        "token": token,
-        "title": target.get("title") or "",
-        "outcome": target.get("outcome") or "",
-        "reason": reason,
-        **extra,
-    })
+    key = f"{trader_id}:{reason}"
+    _SKIP_COUNTS[key] = _SKIP_COUNTS.get(key, 0) + 1
+
+
+def flush_skip_summary() -> None:
+    """每轮结束写一条汇总，替代成百上千条逐笔 COPY_SKIP。"""
+    if not _SKIP_COUNTS:
+        return
+    append_event({"type": "SKIP_SUMMARY", "counts": dict(_SKIP_COUNTS),
+                  "total": sum(_SKIP_COUNTS.values())})
+    _SKIP_COUNTS.clear()
 
 
 def _open_position(account: Dict[str, Any], trader_id: str,
@@ -937,6 +1007,9 @@ def reconcile_account(session: requests.Session, account: Dict[str, Any],
     for token, prev in previous_targets.items():
         if token in targets:
             continue
+        # 灰尘仓位（大量已归零的 5 分钟盘）不记录，否则一天上万条
+        if float(prev.get("value_usd") or 0.0) < MIN_TARGET_USD:
+            continue
         closed = fetch_closed_for_condition(
             session, account["address"], prev.get("condition_id") or "", token
         )
@@ -1050,6 +1123,7 @@ def run_cycle(session: requests.Session, state: Dict[str, Any]) -> Dict[str, Any
             for tid, acc in state["accounts"].items()
         },
     })
+    flush_skip_summary()
     return cycle_marks
 
 
