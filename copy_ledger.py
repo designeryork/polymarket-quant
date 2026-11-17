@@ -113,6 +113,10 @@ def push(message: Optional[str] = None) -> bool:
         return False
 
     target = WORK_DIR / "state" / "copy"
+    # 先清空克隆里的旧文件再全量复制：本地删掉的文件（例如瘦身后的
+    # events.jsonl）必须同步删除，否则会被原样提交回分支。
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True, exist_ok=True)
     for path in STATE_DIR.rglob("*"):
         if path.is_dir():
